@@ -1,0 +1,105 @@
+# =============================================================================
+# AI Operations Agent Platform - local development stack
+#
+# STATUS: PLACEHOLDER.
+#   postgres + redis are real and runnable today (they need no project code).
+#   backend + frontend are commented out until those services exist.
+#
+#   Start the data layer:   docker compose up -d postgres redis
+#   Stop everything:        docker compose down
+#   Reset all data:         docker compose down -v
+# =============================================================================
+
+name: ai-operations-agent
+
+services:
+  postgres:
+    # pgvector image so the RAG phase can add a vector column without a rebuild
+    image: pgvector/pgvector:pg17
+    container_name: aiops-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aiops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiops_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-aiops}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # *.sql here runs once, on first cluster creation only
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiops} -d ${POSTGRES_DB:-aiops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aiops
+
+  redis:
+    image: redis:7-alpine
+    container_name: aiops-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aiops
+
+  # ---------------------------------------------------------------------------
+  # PLACEHOLDER - enable once backend/ contains a FastAPI application
+  # ---------------------------------------------------------------------------
+  # backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: ../infrastructure/docker/backend/Dockerfile
+  #   container_name: aiops-backend
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   ports:
+  #     - "${BACKEND_PORT:-8000}:8000"
+  #   volumes:
+  #     - ./backend:/app          # hot reload in development
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - aiops
+
+  # ---------------------------------------------------------------------------
+  # PLACEHOLDER - enable once frontend/ contains a Next.js application
+  # ---------------------------------------------------------------------------
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: ../infrastructure/docker/frontend/Dockerfile
+  #   container_name: aiops-frontend
+  #   restart: unless-stopped
+  #   environment:
+  #     NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - aiops
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  aiops:
+    driver: bridge
