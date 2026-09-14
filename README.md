@@ -161,6 +161,10 @@ Each phase is a working slice, built in order.
 - [x] **4 — Identity and tenancy.** Argon2id passwords, JWT access tokens,
       registration and login, organization membership with owner/admin/member
       roles, and the tenant-scoped repository pattern.
+- [x] **LLM gateway.** Provider-independent abstraction over Anthropic and
+      OpenAI behind a single gateway with explicit retry policy, plus an
+      authenticated `POST /api/v1/ai/generate`. Built ahead of the phases below,
+      which the agent work depends on.
 - [ ] **5 — Business data.** The CRUD and search surface agents will query,
       plus row-level security behind the scoped repositories.
 - [ ] **6 — Documents.** Upload, storage, chunking, embeddings, vector search.
