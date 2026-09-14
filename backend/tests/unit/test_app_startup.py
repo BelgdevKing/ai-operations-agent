@@ -54,8 +54,15 @@ def test_probe_routes_are_registered(app: FastAPI) -> None:
 
 
 def test_probes_sit_outside_the_versioned_api(app: FastAPI, settings: Settings) -> None:
-    """Health checks must not move when the API version changes."""
-    assert not any(path.startswith(settings.api_v1_prefix) for path in _paths(app))
+    """Health checks must not move when the API version changes.
+
+    Asserted for the probes specifically: business endpoints are versioned and
+    do live under the prefix.
+    """
+    probes = {path for path in _paths(app) if path.startswith("/health")}
+
+    assert probes == {"/health", "/health/ready"}
+    assert not any(path.startswith(settings.api_v1_prefix) for path in probes)
 
 
 def test_request_context_middleware_is_installed(app: FastAPI) -> None:

@@ -147,7 +147,8 @@ async def test_readiness_degraded_when_postgres_is_down(
 
 
 def test_liveness_reports_the_configured_environment() -> None:
-    service = HealthService(Settings(app_env="staging", app_name="Svc"))
+    # staging requires a real JWT secret, as production does.
+    service = HealthService(Settings(app_env="staging", app_name="Svc", jwt_secret_key="s" * 48))
 
     result = service.liveness()
 

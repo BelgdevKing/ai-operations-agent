@@ -44,12 +44,17 @@ def _error_response(
     code: str,
     message: str,
     details: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     body = ErrorResponse(
         error=ErrorDetail(code=code, message=message, details=dict(details or {})),
         request_id=get_request_id(),
     )
-    return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
+    return JSONResponse(
+        status_code=status_code,
+        content=body.model_dump(mode="json"),
+        headers=headers or None,
+    )
 
 
 async def handle_app_error(_: Request, exc: Exception) -> JSONResponse:
@@ -62,7 +67,7 @@ async def handle_app_error(_: Request, exc: Exception) -> JSONResponse:
     else:
         logger.info("%s: %s", exc.code, exc.message)
 
-    return _error_response(exc.status_code, exc.code, exc.message, exc.details)
+    return _error_response(exc.status_code, exc.code, exc.message, exc.details, exc.headers)
 
 
 async def handle_validation_error(_: Request, exc: Exception) -> JSONResponse:

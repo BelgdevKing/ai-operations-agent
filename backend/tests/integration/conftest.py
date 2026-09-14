@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.database import check_database, engine
+from app.core.database import check_database, engine, get_session
 
 
 @pytest.fixture(autouse=True)
@@ -51,3 +53,29 @@ async def session(database: None) -> AsyncGenerator[AsyncSession, None]:
             yield db_session
 
         await transaction.rollback()
+
+
+@pytest.fixture
+async def api_client(app: FastAPI, session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client whose requests share the test's rolled-back session.
+
+    ``get_session`` is overridden so every request reads and writes inside the
+    transaction the ``session`` fixture opened. Data therefore persists across
+    requests within one test - a login can see the user a registration created -
+    and disappears entirely when the fixture rolls back.
+
+    The override intentionally does not commit: the outer transaction is the
+    boundary, and committing it would defeat the isolation.
+    """
+
+    async def override_get_session() -> AsyncGenerator[AsyncSession, None]:
+        yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        yield client
+
+    app.dependency_overrides.clear()

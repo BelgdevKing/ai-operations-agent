@@ -28,13 +28,20 @@ class BaseRepository[ModelT: Base]:
 
     model: type[ModelT]
 
+    # Intermediate base classes set this to opt out of the binding check.
+    __abstract__ = True
+
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
+        # Read from the class's own __dict__, not with getattr: inherited, the
+        # marker would exempt every concrete subclass of an abstract one too.
+        if cls.__dict__.get("__abstract__", False):
+            return
         # Catch a missing binding at import time rather than at first query.
-        if not hasattr(cls, "model") and not getattr(cls, "__abstract__", False):
+        if not hasattr(cls, "model"):
             raise TypeError(f"{cls.__name__} must set a 'model' attribute")
 
     async def get(self, entity_id: uuid.UUID) -> ModelT | None:

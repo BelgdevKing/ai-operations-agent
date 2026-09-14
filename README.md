@@ -156,11 +156,13 @@ Each phase is a working slice, built in order.
 - [x] **2 — Backend foundation.** Configuration, database and session
       management, API router structure, exception handling, structured
       logging, Alembic migrations, typed throughout.
-- [ ] **3 — Multi-tenancy.** Tenant model, tenant-scoped repositories,
-      request-scoped tenant context, row-level security.
-- [ ] **4 — Identity.** Users, JWT auth, roles, tenant membership.
-- [ ] **5 — Business data.** Domain entities and the CRUD + search surface
-      agents will query.
+- [x] **3 — Application schema.** 15 tables, tenant discriminator on every
+      tenant-owned table, one Alembic migration.
+- [x] **4 — Identity and tenancy.** Argon2id passwords, JWT access tokens,
+      registration and login, organization membership with owner/admin/member
+      roles, and the tenant-scoped repository pattern.
+- [ ] **5 — Business data.** The CRUD and search surface agents will query,
+      plus row-level security behind the scoped repositories.
 - [ ] **6 — Documents.** Upload, storage, chunking, embeddings, vector search.
 - [ ] **7 — Agent core.** Claude tool-use loop, tool registry, run records.
 - [ ] **8 — Approvals.** Sensitive-action gate, approval queue, resume-on-approve.

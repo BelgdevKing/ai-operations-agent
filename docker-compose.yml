@@ -83,6 +83,10 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # Redis is part of this stack, so treat its absence as a fault.
       REDIS_REQUIRED: ${REDIS_REQUIRED:-true}
+      # Development default; staging/production refuse to start on it.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-insecure-jwt-secret-change-me}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:

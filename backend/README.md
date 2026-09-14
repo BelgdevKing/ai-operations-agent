@@ -7,8 +7,8 @@ PostgreSQL · Redis · pytest
 
 **Implemented so far:** configuration, async database engine and session
 management, the API router structure, exception handling, structured logging,
-health endpoints, Alembic migrations and the test harness. No business
-resources yet - tenants are the first.
+health endpoints, Alembic migrations, the full application schema, and
+authentication with multi-tenant authorization.
 
 ## Endpoints
 
@@ -19,6 +19,13 @@ resources yet - tenants are the first.
 | GET | `/health/ready` | Readiness — 200 when every *required* dependency answers, else 503 |
 | GET | `/docs` | OpenAPI UI |
 | GET | `/api/v1/openapi.json` | OpenAPI schema |
+| POST | `/api/v1/auth/register` | Create a user, organization and owner membership |
+| POST | `/api/v1/auth/login` | Exchange credentials for an access token |
+| GET | `/api/v1/auth/me` | The caller's profile and memberships |
+| GET | `/api/v1/organization` | The organization the request acts on |
+| GET | `/api/v1/organization/members` | List members |
+| PATCH | `/api/v1/organization/members/{user_id}` | Change a member's role (admin+) |
+| DELETE | `/api/v1/organization/members/{user_id}` | Remove a member (admin+, or yourself) |
 
 Probes sit outside `/api/v1` on purpose: a health check should not have to
 track an API version.
@@ -84,16 +91,115 @@ Redis is optional. No implemented feature uses it, connections are lazy, and
 
 PostgreSQL is required: `/health/ready` returns 503 without it.
 
+## Authentication
+
+Passwords are hashed with **Argon2id** (`argon2-cffi`) and sessions carry a
+**JWT** access token (`PyJWT`). Neither algorithm is implemented here; the code
+supplies parameters and validation rules.
+
+```
+POST /api/v1/auth/register   create a user, their organization, and an owner membership
+POST /api/v1/auth/login      exchange credentials for an access token
+GET  /api/v1/auth/me         the caller's profile and memberships
+```
+
+Send the token as `Authorization: Bearer <token>`.
+
+### What the token contains
+
+A user id, issue and expiry times, a token type, and a unique id — nothing
+else. A JWT is signed, not encrypted, so anything in it is readable by whoever
+holds it.
+
+**Role and organization are deliberately absent.** They are read from the
+database on every request, so removing a member or reducing their role takes
+effect on the next call rather than whenever their token happens to expire.
+
+### Configuration
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `JWT_SECRET_KEY` | development key | **Staging and production refuse to start on the default.** |
+| `JWT_ALGORITHM` | `HS256` | HMAC only — `HS256`, `HS384`, `HS512`. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | There is no revocation list yet; expiry is what ends a session. |
+| `PASSWORD_MIN_LENGTH` | `12` | Length is the only rule. |
+| `ARGON2_TIME_COST` | `3` | |
+| `ARGON2_MEMORY_COST_KIB` | `65536` | 64 MiB, above the OWASP minimum of 19 MiB. |
+| `ARGON2_PARALLELISM` | `4` | |
+
+Generate a real secret with:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Raising the Argon2 cost is safe: existing hashes keep working and are upgraded
+on the owner's next successful login.
+
+## Multi-tenancy and authorization
+
+The organization a request acts on comes from the caller's **verified
+membership**, never from the request. Callers in more than one organization
+choose between them with the `X-Organization-ID` header — which is checked
+against their memberships and grants nothing on its own. With a single
+membership the header is unnecessary.
+
+Dependencies in `app/api/deps.py`:
+
+| Dependency | Gives |
+| --- | --- |
+| `CurrentUser` | the authenticated user |
+| `CurrentMembership` | their verified membership of the organization in play |
+| `CurrentOrganization` | that organization |
+| `CurrentOrganizationId` | the tenant id, for scoping a repository |
+| `require_role(role)` | refuses callers below that role |
+
+Roles are ranked `member < admin < owner`, so `require_role(ADMIN)` admits
+owners too.
+
+| Role | May |
+| --- | --- |
+| owner | everything, including granting and revoking ownership |
+| admin | manage members and organization resources; not owner-only actions |
+| member | ordinary use; read the member list; not administer it |
+
+Standing rules: nobody changes their own role, only an owner grants or revokes
+ownership, and the last owner can be neither demoted nor removed.
+
+## Tenant isolation
+
+`TenantScopedRepository` in `app/repositories/tenant.py` is the single place the
+organization filter is applied. Bind a tenant-owned model and every query it
+makes carries `WHERE organization_id = :organization_id`:
+
+```python
+class AgentRepository(TenantScopedRepository[Agent]):
+    model = Agent
+```
+
+- `get()` deliberately avoids `session.get`, which would fetch by primary key
+  alone and return another tenant's row.
+- `add()` stamps `organization_id` itself, so a service cannot create a row
+  owned by somebody else.
+- Binding a model with no `organization_id` raises at import.
+
+A row belonging to another tenant reads as absent, not forbidden — whether an
+id exists elsewhere is not the caller's business.
+
+Row-level security is not implemented yet; it is the planned second layer
+behind this one.
+
 ## Layout
 
 ```
 app/
 ├── main.py         application factory, middleware, router mounting
-├── core/           config, database, cache, logging, middleware, exceptions
+├── core/           config, database, cache, logging, middleware, exceptions,
+│                   security (Argon2id + JWT)
 ├── api/            routers; deps.py wires dependencies, v1/ is the versioned API
 ├── models/         SQLAlchemy models: Base, mixins
 ├── schemas/        Pydantic v2 request/response contracts
-├── repositories/   data access
+├── repositories/   data access; tenant.py holds the tenant-scoping pattern
 ├── services/       business logic
 ├── agents/         Claude tool-use loop                      (not built yet)
 ├── tools/          tool registry                             (not built yet)

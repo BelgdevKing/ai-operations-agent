@@ -45,6 +45,9 @@ def test_values_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("BACKEND_PORT", "9001")
     monkeypatch.setenv("REDIS_REQUIRED", "true")
+    # Production refuses to start on the development JWT secret; see
+    # tests/unit/test_security.py for that rule on its own.
+    monkeypatch.setenv("JWT_SECRET_KEY", "a" * 48)
 
     settings = Settings()
 

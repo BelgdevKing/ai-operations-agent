@@ -7,7 +7,7 @@ Services raise these; the API layer translates them into HTTP responses in
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 
 class AppError(Exception):
@@ -18,11 +18,16 @@ class AppError(Exception):
         code: Stable machine-readable identifier for clients.
         message: Human-readable description, safe to expose.
         details: Optional structured context, safe to expose.
+        headers: Response headers the status requires.
     """
 
     status_code: int = 500
     code: str = "internal_error"
     message: str = "An unexpected error occurred."
+
+    # Response headers the status requires, such as WWW-Authenticate on a 401.
+    # A class attribute, so a subclass declares them once.
+    headers: ClassVar[dict[str, str]] = {}
 
     def __init__(
         self,

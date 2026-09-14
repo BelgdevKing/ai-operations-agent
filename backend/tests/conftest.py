@@ -14,8 +14,21 @@ from app.main import create_app
 
 @pytest.fixture
 def settings() -> Settings:
-    """Settings for the test process, isolated from any .env on disk."""
-    return Settings(app_env="test", log_format="console", redis_required=False)
+    """Settings for the test process, isolated from any .env on disk.
+
+    Argon2 runs at reduced cost here: at production parameters every
+    registration and login in the suite would take ~60ms of deliberate work.
+    The algorithm and code path are unchanged - only how hard it is - and
+    tests/unit/test_security.py asserts the real parameters directly.
+    """
+    return Settings(
+        app_env="test",
+        log_format="console",
+        redis_required=False,
+        argon2_time_cost=1,
+        argon2_memory_cost_kib=8192,
+        argon2_parallelism=1,
+    )
 
 
 @pytest.fixture

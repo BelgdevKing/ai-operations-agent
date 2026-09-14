@@ -17,7 +17,7 @@ hosts and a different `.env` file.
 | Node.js | 20 LTS or newer | Ships with npm. |
 | PostgreSQL | 16 or 17 | The Windows installer includes `psql` and pgAdmin. |
 | Git | any recent | |
-| Redis | — | **Not required.** See section 6. |
+| Redis | — | **Not required.** See section 7. |
 
 Check what you have:
 
@@ -189,7 +189,58 @@ matches your installation.
 
 ---
 
-## 6. Redis is optional
+## 6. Authentication configuration
+
+Nothing needs configuring to develop locally: the defaults work out of the box.
+Two of them matter before anything is deployed.
+
+**`JWT_SECRET_KEY`** signs access tokens. The default is committed to this
+repository, so anyone can forge a token with it. Staging and production
+**refuse to start** on it - the application exits with an error rather than
+coming up insecure. Generate a real one with:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Changing it invalidates every token already issued, which is also how you
+revoke them all at once.
+
+**Argon2id cost** (`ARGON2_MEMORY_COST_KIB`, `ARGON2_TIME_COST`,
+`ARGON2_PARALLELISM`) controls how expensive password hashing is. The defaults
+are above the OWASP minimum. Raising them is safe: existing hashes keep working
+and are upgraded on the owner's next successful login. Each hash costs about
+60 ms of deliberate work, so a slow login is the feature, not a bug.
+
+See [backend/.env.example](../backend/.env.example) for the full list.
+
+### Trying it out
+
+With the API running:
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/auth/register `
+  -H "Content-Type: application/json" `
+  -d '{"email":"you@example.com","password":"a-perfectly-fine-password","organization_name":"My Company"}'
+```
+
+That returns the user, the organization created for them, the **owner** role,
+and an access token. Use it on subsequent calls:
+
+```powershell
+curl http://localhost:8000/api/v1/auth/me -H "Authorization: Bearer <token>"
+```
+
+<http://localhost:8000/docs> lists the endpoints and has an **Authorize**
+button for pasting a token in.
+
+> Email addresses on reserved test domains (`.test`, `.local`, `.invalid`,
+> `.localhost`) are rejected by the validator per RFC 2606. Use a real domain,
+> or `example.com`, when trying things out.
+
+---
+
+## 7. Redis is optional
 
 No implemented feature uses Redis yet, so it does not need to be installed and
 there is no good native Windows build of it. The backend:
@@ -205,7 +256,7 @@ queue — flip it to `true` and run Redis under WSL2 or use a managed instance.
 
 ---
 
-## 7. Day-to-day commands
+## 8. Day-to-day commands
 
 Backend, with the virtual environment active:
 
@@ -235,7 +286,7 @@ they execute for real.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause and fix |
 | --- | --- |
@@ -250,12 +301,16 @@ they execute for real.
 | Frontend shows the backend as unreachable | The backend is not running, or `NEXT_PUBLIC_API_URL` is wrong. `NEXT_PUBLIC_*` values are baked in at build time — restart `npm run dev` after changing them. |
 | `CREATE EXTENSION "vector"` fails | Expected on Windows. pgvector is not needed yet; skip it. |
 | `alembic: command not found` | The virtual environment is not active. |
+| App exits with `JWT_SECRET_KEY is still the development default` | Expected in staging/production. Set a real secret. |
+| Registration returns 422 for a valid-looking address | Reserved test domains (`.test`, `.local`) are rejected; use `example.com`. |
+| A request returns 400 `organization_required` | You belong to several organizations. Send `X-Organization-ID`. |
+| A request returns 403 after a role change | Roles are read per request, so the change already took effect. |
 | Alembic fails with `Can't locate timezone: UTC` | `tzdata` is missing; `pip install -r requirements-dev.txt` installs it. |
 | Alembic cannot connect | It reads `DATABASE_URL` from the same settings as the app, so fix that and both follow. |
 
 ---
 
-## 9. Which environment file is which
+## 10. Which environment file is which
 
 Three templates exist, for three different situations. Copy the one that
 matches how you are running the stack.
