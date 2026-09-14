@@ -386,9 +386,21 @@ migrations, constraints, and RLS behave as they will in production.
 
 ## 13. Deployment
 
-Local development is `docker compose up`: Postgres (pgvector image), Redis, the
-backend and the frontend. Schema changes are Alembic migrations applied on start;
-migrations are forward-only and reviewed like code.
+Local development runs either way. `docker compose up` is the reference
+environment — Postgres (pgvector image), Redis, the backend and the frontend.
+The same code also runs natively against a localhost Postgres, which is what
+developers without Docker use; see
+[development-windows.md](development-windows.md).
+
+Dependencies are declared as required or optional rather than assumed present.
+Connections are lazy, so the application starts with an optional dependency
+absent and reports it on `/health/ready` without failing the check. Redis is
+optional today because nothing implemented uses it yet; it becomes required as
+soon as caching, rate limiting or the job queue lands, which is a one-line
+configuration change (`REDIS_REQUIRED`). Postgres is always required.
+
+Schema changes are Alembic migrations applied on start; migrations are
+forward-only and reviewed like code.
 
 Production keeps the same shape — the container runs behind a reverse proxy with
 TLS, backed by managed Postgres and Redis. Horizontal scaling is more instances

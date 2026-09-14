@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/* Design tokens. @theme registers them with Tailwind, so utilities such as
+   bg-surface and text-ink-muted resolve to these variables. */
+@theme {
+  --color-surface: #ffffff;
+  --color-surface-muted: #f6f7f9;
+  --color-ink: #0f1419;
+  --color-ink-muted: #5b6570;
+  --color-line: #e3e6ea;
+  --color-accent: #4f46e5;
+  --color-ok: #16a34a;
+  --color-warn: #d97706;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+/* Dark mode overrides the variables themselves, so every utility follows. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-surface: #0d1117;
+    --color-surface-muted: #161b22;
+    --color-ink: #e6edf3;
+    --color-ink-muted: #8b949e;
+    --color-line: #23292f;
+    --color-accent: #818cf8;
+    --color-ok: #3fb950;
+    --color-warn: #d29922;
+  }
+}
+
+body {
+  background-color: var(--color-surface);
+  color: var(--color-ink);
+}

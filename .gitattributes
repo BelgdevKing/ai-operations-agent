@@ -1,0 +1,30 @@
+# Normalise line endings. Dockerfiles, shell scripts and SQL must be LF or they
+# break inside Linux containers, and a mixed repository produces noisy diffs.
+* text=auto eol=lf
+
+# Explicitly LF regardless of platform
+*.py        text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.css       text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.sql       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+Dockerfile  text eol=lf
+.env.example text eol=lf
+
+# Binary - never touched
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
+*.pdf       binary
+
+# Generated; collapse in diffs and reviews
+package-lock.json linguist-generated=true

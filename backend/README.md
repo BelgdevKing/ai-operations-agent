@@ -1,10 +1,79 @@
 # Backend
 
-FastAPI modular monolith. **Not implemented yet** — this directory currently
-holds the target structure only.
+FastAPI modular monolith.
 
-Python 3.14 · FastAPI · SQLAlchemy 2.x (async) · Pydantic v2 · Alembic ·
-PostgreSQL · Redis · pytest
+Python 3.12 · FastAPI · SQLAlchemy 2.x (async) · Pydantic v2 · PostgreSQL ·
+Redis · pytest
+
+**Implemented so far:** settings, async database engine, Redis client, health
+endpoints, test harness. The `modules/` packages are still empty.
+
+## Endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/` | Service metadata |
+| GET | `/health` | Liveness — answers without touching a dependency |
+| GET | `/health/ready` | Readiness — 200 when every *required* dependency answers, else 503 |
+| GET | `/docs` | OpenAPI UI |
+
+## Running natively (no Docker)
+
+Requires Python 3.12 and a PostgreSQL install on `localhost`. Redis is **not**
+required — see below.
+
+```powershell
+cd backend
+
+py -3.12 -m venv .venv          # creates backend\.venv, git-ignored
+.venv\Scripts\activate          # PowerShell or cmd.exe
+
+pip install -r requirements-dev.txt
+
+copy .env.example .env          # optional - defaults already target localhost
+
+uvicorn app.main:app --reload
+```
+
+Activate the virtual environment in every new terminal before running `pip`,
+`uvicorn`, `pytest` or `ruff`; the prompt shows `(.venv)` when it is active.
+`deactivate` leaves it. In Git Bash use `source .venv/Scripts/activate`; if
+PowerShell blocks the script, run
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
+
+Database setup, environment files and troubleshooting:
+[docs/development-windows.md](../docs/development-windows.md).
+
+## Running in Docker
+
+From the repository root:
+
+```bash
+docker compose up --build
+docker compose exec backend pytest
+```
+
+## Tests and lint
+
+With the virtual environment active:
+
+```powershell
+pytest                          # full suite
+pytest tests\unit               # unit tests only
+ruff check app tests            # lint
+```
+
+Every setting has a development default, so the suite runs with no environment
+file. Integration tests skip themselves when PostgreSQL is unreachable.
+
+## Dependencies
+
+Redis is optional. No implemented feature uses it, connections are lazy, and
+`REDIS_REQUIRED` defaults to `false` — so the backend starts, and
+`/health/ready` returns 200, with Redis absent. The Compose stack sets
+`REDIS_REQUIRED=true`, because there Redis really is part of the environment.
+
+PostgreSQL is required: `/health/ready` returns 503 without it.
 
 ## Layout
 
