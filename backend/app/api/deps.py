@@ -32,6 +32,7 @@ from fastapi import Depends, Header, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.gateway import LLMGateway
 from app.core.config import Settings
 from app.core.database import get_session
 from app.core.exceptions import AppError, PermissionDeniedError, UnauthorizedError
@@ -41,6 +42,7 @@ from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
 from app.repositories.membership import MembershipLookup
 from app.repositories.user import UserRepository
+from app.services.ai import AIService
 from app.services.auth import AuthService
 from app.services.health import HealthService
 from app.services.membership import MembershipService
@@ -266,6 +268,40 @@ RequireAdmin = Annotated[OrganizationMember, Depends(require_role(MemberRole.ADM
 
 RequireMember = Annotated[OrganizationMember, Depends(require_role(MemberRole.MEMBER))]
 """Any active member of the organization."""
+
+
+# -- Language models ----------------------------------------------------------
+
+
+def get_llm_gateway(request: Request, settings: SettingsDep) -> LLMGateway:
+    """The application's gateway, built once and reused.
+
+    Cached on application state rather than in a module-level singleton, so
+    each application built by ``create_app`` - including each one a test builds
+    - has its own and they cannot interfere.
+
+    Built on first use rather than at start-up because a deployment with no
+    provider credential must still start; the failure belongs on the first
+    model call, not on boot. Two concurrent first requests may each build one
+    and discard a duplicate, which is harmless and happens at most once.
+    """
+    gateway: LLMGateway | None = getattr(request.app.state, "llm_gateway", None)
+    if gateway is None:
+        gateway = LLMGateway.from_settings(settings)
+        request.app.state.llm_gateway = gateway
+    return gateway
+
+
+LLMGatewayDep = Annotated[LLMGateway, Depends(get_llm_gateway)]
+"""The configured LLM gateway."""
+
+
+def get_ai_service(gateway: LLMGatewayDep, settings: SettingsDep) -> AIService:
+    return AIService(gateway, settings)
+
+
+AIServiceDep = Annotated[AIService, Depends(get_ai_service)]
+"""Application-level model access. Endpoints depend on this, never on a provider."""
 
 
 def get_membership_service(session: SessionDep, membership: CurrentMembership) -> MembershipService:

@@ -10,6 +10,11 @@ email-validator>=2.2,<3.0
 # JWT signing/verification. Neither is implemented by hand.
 argon2-cffi>=23.1,<26.0
 pyjwt>=2.10,<3.0
+# LLM provider SDKs. Imported only by app/ai/providers/ - see the AI
+# abstraction section of README.md for why that boundary matters.
+anthropic>=1.5,<2.0
+openai>=3.13,<4.0
+
 sqlalchemy[asyncio]>=2.0.36,<3.0
 alembic>=1.14,<2.0
 # zoneinfo has no time zone database on Windows, and slim Linux images may

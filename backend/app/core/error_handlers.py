@@ -58,15 +58,24 @@ def _error_response(
 
 
 async def handle_app_error(_: Request, exc: Exception) -> JSONResponse:
-    """Expected domain failure: log at the level its severity warrants."""
+    """Expected domain failure: log at the level its severity warrants.
+
+    A 4xx message is guidance for the caller and is returned as written. A 5xx
+    message is not: it describes something wrong on this side, and the specific
+    text routinely names internal detail - which environment variable is unset,
+    which provider is configured, which model was refused. Those go to the log;
+    the client gets the class's generic message and the correlation id that
+    ties the two together.
+    """
     # Narrowing: the handler is only registered for this exception type.
     assert isinstance(exc, AppError)
 
     if exc.status_code >= 500:
         logger.error("%s: %s", exc.code, exc.message, exc_info=exc)
-    else:
-        logger.info("%s: %s", exc.code, exc.message)
+        # Class default, not the instance's message, and no details.
+        return _error_response(exc.status_code, exc.code, type(exc).message, None, exc.headers)
 
+    logger.info("%s: %s", exc.code, exc.message)
     return _error_response(exc.status_code, exc.code, exc.message, exc.details, exc.headers)
 
 

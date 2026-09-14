@@ -48,6 +48,9 @@ def test_values_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> No
     # Production refuses to start on the development JWT secret; see
     # tests/unit/test_security.py for that rule on its own.
     monkeypatch.setenv("JWT_SECRET_KEY", "a" * 48)
+    # Production also requires the selected LLM provider's key; see
+    # tests/unit/test_ai_configuration.py for that rule on its own.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-secret")
 
     settings = Settings()
 

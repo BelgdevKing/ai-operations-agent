@@ -308,7 +308,11 @@ def test_deployed_environments_refuse_a_short_secret() -> None:
 
 
 def test_a_real_secret_is_accepted_in_production() -> None:
-    settings = Settings(app_env="production", jwt_secret_key="x" * 48)
+    settings = Settings(
+        app_env="production",
+        jwt_secret_key="x" * 48,
+        anthropic_api_key="test-anthropic-secret",
+    )
 
     assert settings.uses_development_jwt_secret is False
 

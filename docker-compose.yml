@@ -87,6 +87,17 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-insecure-jwt-secret-change-me}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      # Only the selected provider needs a key; absent, the API still
+      # starts and model calls fail with a clear configuration error.
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.5}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_RETRY_MAX_DELAY_SECONDS: ${LLM_RETRY_MAX_DELAY_SECONDS:-8}
+      LLM_ALLOWED_MODELS: ${LLM_ALLOWED_MODELS:-}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:

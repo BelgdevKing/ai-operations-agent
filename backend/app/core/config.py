@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["development", "staging", "production", "test"]
@@ -23,6 +23,9 @@ JWTAlgorithm = Literal["HS256", "HS384", "HS512"]
 
 # Deliberately obvious. Never use this outside local development.
 DEV_JWT_SECRET_KEY = "dev-only-insecure-jwt-secret-change-me"
+
+# Which vendor serves model calls. Only the selected one needs a credential.
+LLMProviderName = Literal["anthropic", "openai"]
 
 # Below this, a brute-forced HMAC key is within reach.
 MIN_PRODUCTION_SECRET_LENGTH = 32
@@ -96,6 +99,51 @@ class Settings(BaseSettings):
     argon2_memory_cost_kib: int = Field(default=65536, ge=8192)
     argon2_parallelism: int = Field(default=4, ge=1)
 
+    # -- Language models -----------------------------------------------------
+    # Credentials are SecretStr: printing a Settings object, dumping it to
+    # JSON, or letting one reach a log or a traceback yields "**********"
+    # rather than the key. Reading the real value requires an explicit
+    # .get_secret_value(), which is easy to grep for in review.
+    #
+    # Only the selected provider needs a key. The validator below refuses to
+    # start a deployed environment without it; development starts regardless
+    # and fails at call time with LLMConfigurationError, so the application is
+    # still runnable with no vendor account.
+    llm_provider: LLMProviderName = "anthropic"
+    llm_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="Per-call ceiling passed to the provider SDK, so a model "
+        "call can never hang a request indefinitely.",
+    )
+
+    anthropic_api_key: SecretStr | None = None
+    anthropic_model: str = "claude-opus-5"
+
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5.5"
+
+    # Gateway retry policy. The gateway is the only thing that retries: the
+    # provider SDKs are constructed with their own retries disabled, so the
+    # worst case is exactly llm_max_retries + 1 calls.
+    llm_max_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Retries after the first attempt. 0 disables retrying.",
+    )
+    llm_retry_max_delay_seconds: float = Field(
+        default=8.0,
+        gt=0,
+        description="Ceiling on any single backoff wait, and on how long a "
+        "provider's retry-after hint may be before the gateway gives up "
+        "instead of holding the caller.",
+    )
+
+    # Models an API caller may request by name, comma-separated. Empty means
+    # only the configured model is allowed, which is the safe default: without
+    # it a client could name an expensive model and bill the deployment for it.
+    llm_allowed_models: str = ""
+
     @field_validator("log_level")
     @classmethod
     def _normalise_log_level(cls, value: str) -> str:
@@ -126,6 +174,47 @@ class Settings(BaseSettings):
                     f"characters in {self.app_env}."
                 )
         return self
+
+    @model_validator(mode="after")
+    def _require_the_selected_provider_credential(self) -> Settings:
+        """Refuse to start a deployed environment without the key it will need.
+
+        Checked for the selected provider only: a deployment that uses
+        Anthropic should not have to hold an OpenAI account. Failing at
+        start-up rather than on the first model call turns a silent
+        misconfiguration into an obvious one.
+        """
+        if self.app_env in ("production", "staging") and self.llm_api_key is None:
+            raise ValueError(
+                f"LLM_PROVIDER is {self.llm_provider!r}, so "
+                f"{self.llm_provider.upper()}_API_KEY must be set in {self.app_env}."
+            )
+        return self
+
+    @property
+    def llm_api_key(self) -> SecretStr | None:
+        """Credential for the selected provider, if one is configured."""
+        keys: dict[str, SecretStr | None] = {
+            "anthropic": self.anthropic_api_key,
+            "openai": self.openai_api_key,
+        }
+        return keys[self.llm_provider]
+
+    @property
+    def llm_model(self) -> str:
+        """Default model for the selected provider."""
+        models = {"anthropic": self.anthropic_model, "openai": self.openai_model}
+        return models[self.llm_provider]
+
+    @property
+    def allowed_models(self) -> frozenset[str]:
+        """Models a request may name.
+
+        Always includes the configured model, so the documented default works
+        whatever else is listed.
+        """
+        extra = {name.strip() for name in self.llm_allowed_models.split(",") if name.strip()}
+        return frozenset({self.llm_model, *extra})
 
     @property
     def uses_development_jwt_secret(self) -> bool:
