@@ -2,15 +2,38 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
 
 
-def test_defaults_are_development_friendly() -> None:
-    """A bare checkout must produce a usable configuration."""
-    settings = Settings()
+@pytest.fixture
+def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every Settings variable from the process environment.
+
+    The names come from the model's own fields rather than a hard-coded list,
+    so adding a setting cannot quietly reintroduce the leak this guards
+    against. Matching is case-insensitive because Settings is.
+    """
+    field_names = {name.upper() for name in Settings.model_fields}
+    for key in list(os.environ):
+        if key.upper() in field_names:
+            monkeypatch.delenv(key, raising=False)
+
+
+def test_defaults_are_development_friendly(isolated_environment: None) -> None:
+    """A bare checkout must produce a usable configuration.
+
+    Both ambient sources are shut out: the fixture clears the environment, and
+    ``_env_file=None`` ignores any backend/.env. Otherwise this asserts
+    whatever the machine happens to be configured with - it passed locally
+    only because the developer's DATABASE_URL also points at localhost, and
+    failed under Docker, where Compose sets the host to "postgres".
+    """
+    settings = Settings(_env_file=None)
 
     assert settings.app_env == "development"
     assert settings.backend_port == 8000

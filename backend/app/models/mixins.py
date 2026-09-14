@@ -1,17 +1,13 @@
-"""Reusable column groups for ORM models.
-
-Tenant scoping is deliberately absent: it arrives with the tenants table, so
-that the foreign key can be declared properly rather than left dangling.
-"""
+"""Reusable column groups for ORM models."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 
 class UUIDPrimaryKeyMixin:
@@ -29,6 +25,16 @@ class UUIDPrimaryKeyMixin:
     )
 
 
+class CreatedAtMixin:
+    """Creation timestamp, for rows that are never updated."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class TimestampMixin:
     """Creation and update timestamps, both maintained by the database."""
 
@@ -43,3 +49,31 @@ class TimestampMixin:
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class OrganizationScopedMixin:
+    """Marks a table as owned by one tenant.
+
+    Declaring the column once is what makes tenant scoping auditable: every
+    table carrying this mixin has a non-null, indexed ``organization_id``, so
+    the scoped repositories - and the row-level security policies that will
+    back them - have a single predicate to apply everywhere.
+
+    ``ON DELETE CASCADE`` means removing an organization removes its data. In
+    normal operation an organization is archived via its status rather than
+    deleted; the cascade exists so that a genuine tenant off-boarding is one
+    statement instead of fifteen.
+
+    A ``declared_attr`` is required because a ``ForeignKey`` column object
+    cannot be shared between mapped classes.
+    """
+
+    @declared_attr
+    @classmethod
+    def organization_id(cls) -> Mapped[uuid.UUID]:
+        return mapped_column(
+            PgUUID(as_uuid=True),
+            ForeignKey("organizations.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
