@@ -4,5 +4,9 @@ uvicorn[standard]>=0.32,<1.0
 pydantic>=2.9,<3.0
 pydantic-settings>=2.6,<3.0
 sqlalchemy[asyncio]>=2.0.36,<3.0
+alembic>=1.14,<2.0
+# zoneinfo has no time zone database on Windows, and slim Linux images may
+# lack one too. Alembic needs it for the UTC timestamps in migration names.
+tzdata>=2024.2
 asyncpg>=0.30,<1.0
 redis>=5.2,<7.0

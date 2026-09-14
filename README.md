@@ -44,12 +44,14 @@ Architecture is a **modular monolith**. No microservices, no Kubernetes.
 ai-operations-agent/
 ├── backend/                   # FastAPI modular monolith (Python 3.12)
 │   ├── app/
-│   │   ├── main.py            # application entry point
-│   │   ├── api/health.py      # GET /health, GET /health/ready
-│   │   ├── core/              # settings, database engine, Redis client
-│   │   ├── modules/           # business modules (see backend/README.md)
-│   │   ├── shared/            # cross-cutting helpers
-│   │   └── workers/           # background job handlers
+│   │   ├── main.py            # application factory
+│   │   ├── api/               # routers; health probes + versioned v1 API
+│   │   ├── core/              # config, database, logging, middleware, errors
+│   │   ├── models/            # SQLAlchemy models
+│   │   ├── schemas/           # Pydantic v2 contracts
+│   │   ├── repositories/      # data access
+│   │   ├── services/          # business logic
+│   │   └── agents,tools,workflows,knowledge,audit/   # planned areas
 │   ├── alembic/               # database migrations
 │   ├── tests/                 # unit + integration (pytest)
 │   ├── .env.example           # native development settings
@@ -149,9 +151,11 @@ Each phase is a working slice, built in order.
 
 - [x] **0 — Scaffolding.** Repository structure, architecture docs.
 - [x] **1 — Local environment.** Docker Compose stack (FastAPI, Next.js,
-      PostgreSQL, Redis), health endpoints, homepage, pytest harness.
-- [ ] **2 — Foundation.** Alembic migrations, base models, structured logging,
-      centralised error handling.
+      PostgreSQL, Redis), health endpoints, homepage, pytest harness, plus a
+      native Windows setup without Docker.
+- [x] **2 — Backend foundation.** Configuration, database and session
+      management, API router structure, exception handling, structured
+      logging, Alembic migrations, typed throughout.
 - [ ] **3 — Multi-tenancy.** Tenant model, tenant-scoped repositories,
       request-scoped tenant context, row-level security.
 - [ ] **4 — Identity.** Users, JWT auth, roles, tenant membership.

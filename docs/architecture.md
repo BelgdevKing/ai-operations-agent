@@ -1,7 +1,9 @@
 # Architecture
 
-**Status:** planned. Nothing in this document is implemented yet; this is the
-target design the code will be built toward.
+**Status:** partly built. The backend foundation exists - configuration,
+database and session management, the API router structure, exception handling,
+structured logging, health endpoints and Alembic migrations. Sections marked
+*planned* are the design the rest of the code will be built toward.
 
 ---
 
@@ -43,7 +45,7 @@ flowchart TB
     subgraph Backend["FastAPI Modular Monolith"]
         API["API layer · /api/v1"]
         MW["Middleware<br/>auth · tenant context · request id"]
-        MOD["Business modules"]
+        MOD["Services · repositories · models"]
         WRK["Background workers"]
     end
 
@@ -97,63 +99,83 @@ Model layer       SQLAlchemy 2.x ORM models
 Rules:
 
 - Routers contain no business logic; services contain no SQL.
-- A module talks to another module **through its service interface only** —
-  never by importing its models or querying its tables.
+- One area reaches another **through its service only** — never by importing
+  its models or querying its tables.
 - Pydantic v2 models are the contract at the API edge; SQLAlchemy models never
   leave the service layer.
 
+Section 3 sets out how this maps onto packages.
+
 ---
 
-## 3. Module map
+## 3. Code structure
+
+The backend is organised by **layer**, with the domain areas that are more than
+a layer given their own package.
 
 ```
 backend/app/
-├── core/          configuration, DB engine/session, security primitives, logging
-├── api/v1/        versioned routers, dependency wiring
-├── shared/        pagination, error types, base schemas, common mixins
-├── workers/       background job handlers (Redis-backed queue)
-└── modules/
-    ├── tenants/         tenant records, settings, per-tenant feature flags
-    ├── users/           users, roles, tenant membership, authentication
-    ├── agents/          agent definitions, tool registry, execution engine, runs
-    ├── conversations/   conversations, messages, streaming transcripts
-    ├── documents/       upload, storage, chunking, embeddings, vector search
-    ├── workflows/       workflow definitions, steps, executions, state machine
-    ├── approvals/       approval requests, approver routing, decisions
-    ├── audit/           append-only audit log, run traces, metrics
-    └── integrations/    outbound connectors to tenant systems and APIs
+├── main.py         application factory, middleware, router mounting
+├── core/           configuration, database, cache, logging, middleware, errors
+├── api/            HTTP layer
+│   ├── deps.py     shared dependencies (settings, session, services)
+│   ├── health.py   probe endpoints, deliberately unversioned
+│   └── v1/         versioned API; endpoints/ holds one module per resource
+├── models/         SQLAlchemy models: Base, mixins, one module per aggregate
+├── schemas/        Pydantic v2 request/response contracts
+├── repositories/   data access; every query goes through one of these
+├── services/       business logic, orchestration, policy checks
+├── agents/         Claude tool-use loop, run records          (not built yet)
+├── tools/          the tool registry an agent may call        (not built yet)
+├── workflows/      workflow definitions and state machine     (not built yet)
+├── knowledge/      document ingestion and retrieval (RAG)     (not built yet)
+└── audit/          append-only audit trail and run traces     (not built yet)
 ```
 
-Every module follows the same internal shape, so any module is navigable once
-one of them is:
+A request moves down the layers and back:
 
 ```
-modules/<name>/
-├── router.py       FastAPI routes
-├── schemas.py      Pydantic v2 request/response models
-├── service.py      business logic - the module's public interface
-├── repository.py   tenant-scoped data access
-├── models.py       SQLAlchemy models
-└── exceptions.py   domain errors, mapped to HTTP at the API edge
+api/        routers: validate, call a service, shape the response. No logic.
+services/   the business operation. Raises domain errors, never HTTPException.
+repositories/ queries. Tenant-scoped, so isolation is enforced in one place.
+models/     the tables.
 ```
+
+Rules that keep the layers from blurring:
+
+- Routers contain no business logic; services contain no SQL.
+- Services never import FastAPI. They raise `core.exceptions` errors, which the
+  API layer translates — that is what makes a service reusable from a worker or
+  an agent tool, not just from HTTP.
+- Pydantic schemas are the contract at the edge; SQLAlchemy models never leave
+  the service layer.
+- A service may call another service. Nothing calls another area's repository.
+
+### Why layer-first rather than a package per domain
+
+Grouping by layer puts the cross-cutting rules where they can be enforced: one
+`BaseRepository` is the single place tenant scoping is applied, and one error
+hierarchy is the single place failures are defined. The domain areas that carry
+real machinery rather than plain CRUD — agents, tools, workflows, knowledge,
+audit — get their own package, because their internals are not a layer and do
+not belong spread across four of them.
 
 ### Dependency direction
 
 ```
-agents ──┬──> documents      (retrieval)
-         ├──> integrations   (tool execution)
-         ├──> workflows      (start / resume)
-         ├──> approvals      (gate sensitive actions)
-         └──> audit          (record everything)
+agents ──┬──> knowledge     (retrieval)
+         ├──> tools         (execution)
+         ├──> workflows     (start / resume)
+         └──> audit         (record everything)
 
-workflows ──> approvals ──> audit
-
-all modules ──> tenants, users, core
+workflows ──> audit
+services ──> repositories ──> models
+everything ──> core
 ```
 
-`audit` and `tenants` are leaves: they depend on nothing above them. Cycles are
-not allowed — if two modules need each other, the shared concept belongs in
-`shared/` or in a third module.
+`core` and `audit` are leaves: they depend on nothing above them. Cycles are not
+allowed — if two areas need each other, the shared concept belongs in `core/` or
+in a third area.
 
 ---
 

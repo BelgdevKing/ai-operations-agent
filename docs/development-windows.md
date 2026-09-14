@@ -80,11 +80,15 @@ pip install -r requirements-dev.txt
 
 copy .env.example .env          # optional - defaults already target localhost
 
+alembic upgrade head            # create the schema
+
 uvicorn app.main:app --reload
 ```
 
 The API is then on <http://localhost:8000>, with interactive docs at
 <http://localhost:8000/docs>.
+
+Re-run `alembic upgrade head` whenever you pull changes that add a migration.
 
 ### About the virtual environment
 
@@ -207,10 +211,14 @@ Backend, with the virtual environment active:
 
 ```powershell
 uvicorn app.main:app --reload        # run the API
+alembic upgrade head                 # apply migrations
+alembic revision --autogenerate -m "add tenants"
 pytest                               # full test suite
-pytest tests\unit                    # unit tests only
+pytest tests\unit                    # unit tests only, no database needed
+pytest -m integration                # only the tests needing PostgreSQL
 ruff check app tests                 # lint
 ruff format app tests                # format
+mypy                                 # type check
 ```
 
 Frontend:
@@ -241,6 +249,9 @@ they execute for real.
 | Port 8000 or 3000 already in use | Find the owner with `netstat -ano \| findstr :8000`, then stop it or run on another port (`uvicorn ... --port 8001`, `npm run dev -- -p 3001`). |
 | Frontend shows the backend as unreachable | The backend is not running, or `NEXT_PUBLIC_API_URL` is wrong. `NEXT_PUBLIC_*` values are baked in at build time — restart `npm run dev` after changing them. |
 | `CREATE EXTENSION "vector"` fails | Expected on Windows. pgvector is not needed yet; skip it. |
+| `alembic: command not found` | The virtual environment is not active. |
+| Alembic fails with `Can't locate timezone: UTC` | `tzdata` is missing; `pip install -r requirements-dev.txt` installs it. |
+| Alembic cannot connect | It reads `DATABASE_URL` from the same settings as the app, so fix that and both follow. |
 
 ---
 

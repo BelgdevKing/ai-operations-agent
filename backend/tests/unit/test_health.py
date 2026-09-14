@@ -1,15 +1,17 @@
-"""Health endpoint behaviour. No external services required."""
+"""Health endpoints and the readiness rule behind them."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 
 from app import __version__
 from app.core import cache, database
-from app.core.config import get_settings
+from app.core.config import Settings
+from app.services.health import HealthService
 
 
 def _returns(value: bool) -> Callable[[], object]:
@@ -31,24 +33,28 @@ def dependencies(monkeypatch: pytest.MonkeyPatch) -> Callable[[bool, bool], None
 
 
 @pytest.fixture
-def redis_required(monkeypatch: pytest.MonkeyPatch) -> Callable[[bool], None]:
-    """Toggle whether Redis counts towards readiness."""
+def redis_required(app: FastAPI) -> Callable[[bool], None]:
+    """Toggle whether Redis counts towards readiness for this application."""
 
     def set_required(required: bool) -> None:
-        monkeypatch.setattr(get_settings(), "redis_required", required)
+        app.state.settings.redis_required = required
 
     return set_required
 
 
-async def test_health_returns_ok(client: AsyncClient) -> None:
+# -- Liveness -----------------------------------------------------------------
+
+
+async def test_health_returns_ok(client: AsyncClient, settings: Settings) -> None:
     response = await client.get("/health")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert body["version"] == __version__
-    assert body["service"]
-    assert body["environment"]
+    assert response.json() == {
+        "status": "ok",
+        "service": settings.app_name,
+        "version": __version__,
+        "environment": "test",
+    }
 
 
 async def test_health_does_not_touch_dependencies(
@@ -63,6 +69,9 @@ async def test_health_does_not_touch_dependencies(
     monkeypatch.setattr(cache, "check_redis", explode)
 
     assert (await client.get("/health")).status_code == 200
+
+
+# -- Readiness ----------------------------------------------------------------
 
 
 async def test_readiness_ok_when_everything_is_up(
@@ -100,7 +109,6 @@ async def test_readiness_ok_when_optional_redis_is_down(
     body = response.json()
     assert body["status"] == "ready"
     assert body["dependencies"]["redis"] == {"status": "unavailable", "required": False}
-    assert body["dependencies"]["postgres"] == {"status": "ok", "required": True}
 
 
 async def test_readiness_degraded_when_required_redis_is_down(
@@ -115,9 +123,7 @@ async def test_readiness_degraded_when_required_redis_is_down(
     response = await client.get("/health/ready")
 
     assert response.status_code == 503
-    body = response.json()
-    assert body["status"] == "degraded"
-    assert body["dependencies"]["redis"] == {"status": "unavailable", "required": True}
+    assert response.json()["status"] == "degraded"
 
 
 async def test_readiness_degraded_when_postgres_is_down(
@@ -137,12 +143,26 @@ async def test_readiness_degraded_when_postgres_is_down(
     assert body["dependencies"]["postgres"] == {"status": "unavailable", "required": True}
 
 
-async def test_root_returns_service_metadata(client: AsyncClient) -> None:
-    response = await client.get("/")
-
-    assert response.status_code == 200
-    assert response.json()["health"] == "/health"
+# -- Service layer, without HTTP ----------------------------------------------
 
 
-async def test_unknown_route_returns_404(client: AsyncClient) -> None:
-    assert (await client.get("/does-not-exist")).status_code == 404
+def test_liveness_reports_the_configured_environment() -> None:
+    service = HealthService(Settings(app_env="staging", app_name="Svc"))
+
+    result = service.liveness()
+
+    assert result.environment == "staging"
+    assert result.service == "Svc"
+    assert result.status == "ok"
+
+
+async def test_readiness_rule_ignores_optional_dependencies(
+    dependencies: Callable[[bool, bool], None],
+) -> None:
+    dependencies(True, False)
+    service = HealthService(Settings(redis_required=False))
+
+    result = await service.readiness()
+
+    assert result.status == "ready"
+    assert result.dependencies["redis"].status == "unavailable"

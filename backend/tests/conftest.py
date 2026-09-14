@@ -2,17 +2,55 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Generator
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
+from app.core.config import Settings, get_settings
+from app.main import create_app
 
 
 @pytest.fixture
-async def client() -> AsyncGenerator[AsyncClient, None]:
+def settings() -> Settings:
+    """Settings for the test process, isolated from any .env on disk."""
+    return Settings(app_env="test", log_format="console", redis_required=False)
+
+
+@pytest.fixture
+def app(settings: Settings) -> FastAPI:
+    """A freshly built application, so no test inherits another's routes."""
+    return create_app(settings)
+
+
+@pytest.fixture
+def client_factory(app: FastAPI) -> Callable[..., AsyncClient]:
+    """Build a client against the app.
+
+    ``raise_app_exceptions=False`` is needed to observe the 500 response an
+    unhandled exception produces; Starlette re-raises it otherwise.
+    """
+
+    def build(*, raise_app_exceptions: bool = True) -> AsyncClient:
+        return AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions),
+            base_url="http://testserver",
+        )
+
+    return build
+
+
+@pytest.fixture
+async def client(client_factory: Callable[..., AsyncClient]) -> AsyncGenerator[AsyncClient, None]:
     """HTTP client bound to the ASGI app in-process (no network, no lifespan)."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+    async with client_factory() as async_client:
         yield async_client
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache() -> Generator[None, None, None]:
+    """Keep the cached settings singleton from leaking between tests."""
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()

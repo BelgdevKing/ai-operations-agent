@@ -11,12 +11,38 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-ra -q"
 markers = [
-    "integration: requires a live PostgreSQL and Redis (skipped when unreachable)",
+    "integration: requires a live PostgreSQL (skipped when unreachable)",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "ANN", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use assert freely and need no return annotations on fixtures.
+"tests/*" = ["ANN401"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+plugins = ["pydantic.mypy"]
+
+# Every function must be typed - this is what "type hints throughout" means in
+# practice, and it is enforced rather than assumed.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+# Generated migrations are not hand-maintained code.
+module = "alembic.*"
+ignore_errors = true

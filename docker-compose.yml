@@ -76,6 +76,8 @@ services:
       APP_ENV: ${APP_ENV:-development}
       DEBUG: ${DEBUG:-true}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-console}
+      API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://aiops:aiops_dev_password@postgres:5432/aiops}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
