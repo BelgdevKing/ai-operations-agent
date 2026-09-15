@@ -445,11 +445,12 @@ Application code calls `AIService`, which calls `LLMGateway`. Nothing outside
 
 ### Built in stages
 
-Part 10 is incremental. **10A** was the foundation — shared types, errors, the
-`LLMProvider` interface. **10B** added the Anthropic and OpenAI adapters and a
-registry. **10C** added the `LLMGateway`. **10D**, complete, adds `AIService`
-and the first authenticated endpoint. Nothing is persisted yet: there is no
-conversation storage.
+The gateway was built before the agent runtime that depends on it: shared types
+and the `LLMProvider` interface first, then the Anthropic and OpenAI adapters
+and a registry, then the `LLMGateway` itself, then `AIService` and the
+authenticated endpoint. Conversations and messages are persisted now — see
+`app/models/conversation.py` and the `/ai/conversations` routes — so a run
+continues where the previous one stopped.
 
 Importing `app.ai` deliberately does **not** import a vendor SDK — the adapters
 live under `app.ai.providers` so code needing only the shared types does not
@@ -469,11 +470,13 @@ app/
 ├── services/       business logic
 ├── ai/             provider-independent LLM abstraction
 │   └── providers/  one adapter per vendor; only these may import an SDK
-├── agents/         Claude tool-use loop                      (not built yet)
-├── tools/          tool registry                             (not built yet)
-├── workflows/      workflow definitions and state machine    (not built yet)
+├── agents/         tool-use loop, run state, cancellation
+├── tools/          tool registry, executor, business tools
+├── workflows/      workflow definitions and the state machine
+├── observability/  metrics, tracing, the price book, the vocabulary
+├── demo/           the demo dataset, loaded by scripts/seed_demo_data.py
 ├── knowledge/      document ingestion and retrieval          (not built yet)
-└── audit/          append-only audit trail                   (not built yet)
+└── audit/          append-only audit trail (recorded; no API over it yet)
 alembic/            migration environment and versions
 tests/              unit/ and integration/
 ```

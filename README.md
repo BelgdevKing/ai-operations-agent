@@ -1,210 +1,414 @@
 # AI Operations Agent Platform
 
-A multi-tenant SaaS platform where businesses run AI agents against their own
-operational data — agents that understand a request, look things up, reason over
-business rules, call tools, and execute workflows, while sensitive actions stop
-for human approval and everything is written to an audit log.
+**Self-hosted AI agents that act on your business data — and stop for a human
+before they do anything destructive.**
 
-Open-source portfolio project. **Status: authenticated application with a
-working AI generation path.** Agents, tools, RAG and workflows are not built
-yet — see the roadmap below.
+A multi-tenant backend and console where an AI agent answers an operational
+question, looks the answer up through permissioned tools, and — when it wants to
+change something — pauses and waits for a person to approve it. Every run, tool
+call, approval and token is recorded.
+
+Open-source, MIT, self-hosted. Built as a portfolio project and developed in
+public.
 
 ---
 
-## What it is meant to do
+## The problem
 
-| Capability | Description |
+Operations teams answer the same questions all day — *where is this shipment,
+what does this customer owe, why was this invoice held* — by clicking through
+internal systems. A chatbot bolted onto those systems is easy to build and hard
+to trust: it can be talked into doing something, it keeps no record of what it
+did, and nobody can tell afterwards whether a customer's order was cancelled by
+a person or by a language model.
+
+This project takes the other approach. The model chooses **which** tool to call;
+the platform decides **whether** that call is allowed, executes it itself, and
+stops the destructive ones until a named human approves.
+
+## Who it is for
+
+- **Engineers evaluating agent architecture** — a complete, readable
+  implementation of tool use, durable runs, approvals and tenancy, with 2,074
+  tests written against the boundaries rather than the plumbing.
+- **Teams who want agents over internal data without sending it to a SaaS** —
+  everything runs on your own host, against your own PostgreSQL.
+- **Anyone who has to explain to a compliance officer what the agent did** —
+  runs, steps, tool executions, approvals and token cost are all durable rows.
+
+It is **not** a finished commercial product, and nobody is running it in
+production. See [Project status](#project-status).
+
+---
+
+## What it does today
+
+Everything in this table is implemented and covered by tests.
+
+| Capability | What is actually there |
 | --- | --- |
-| Understand business requests | Natural-language input turned into a structured intent |
-| Search business data | Query tenant records through safe, scoped tools |
-| Search company documents | Retrieval over uploaded documents (RAG) |
-| Use tools and APIs | Claude tool use over an explicit, permissioned tool registry |
-| Reason over business rules | Tenant-configurable policies constrain what an agent may do |
-| Execute workflows | Multi-step operations run as durable, resumable jobs |
-| Request human approval | Sensitive actions pause and wait for an approver |
-| Maintain audit logs | Every decision, tool call, and approval is recorded immutably |
-| Monitor agent execution | Per-run traces: steps, tokens, latency, cost, outcome |
+| **Agent runs** | A tool-use loop with a bounded step budget. Each run is a durable row: status, steps, tool calls, tokens, latency, stable error code. |
+| **Tool execution** | A registry of typed tools with declared safety classes. The platform validates arguments against a schema, enforces a per-call timeout and bounds the result size. The model never executes anything itself. |
+| **Human approval** | A tool marked `destructive` pauses the run and writes an approval row. An admin approves or rejects; the same run then continues. The gated action runs at most once, enforced by a conditional UPDATE rather than by application logic. |
+| **Workflows** | Multi-step definitions — tool calls, agent steps, conditions, approval gates — executed as a durable state machine that survives the request that started it. |
+| **Conversations** | Server-side conversation and message history, so a run can continue where the last one stopped. |
+| **Multi-tenancy** | Shared schema with an `organization_id` discriminator. One repository base class is the only place the tenant filter is written, and composite foreign keys make a cross-tenant reference unrepresentable in the database. |
+| **Identity** | Argon2id passwords, JWT access tokens, organizations with owner/admin/member roles. The active tenant comes from a header that is always checked against the caller's membership. |
+| **Usage and cost** | Runs, steps, tool executions and approvals aggregated per organization, with token cost from a configurable price book. Money is `Decimal`, serialised as a string. Unpriced models report *unknown* rather than zero. |
+| **Metrics** | A dependency-free Prometheus endpoint, off by default, behind a bearer token. Bounded label sets with an overflow bucket — no tenant id and no execution id ever becomes a label. |
+| **Tracing** | Spans at six boundaries with W3C trace-context propagation, off by default. A 23-key attribute allow-list, and any UUID-shaped value is dropped whatever key it arrives under. |
+| **Reliability** | Every external wait is bounded and configurable. A database outage answers `503 service_unavailable`, not `500`. The model gateway is the only thing that retries, and it retries only transport failures. |
+| **Console** | A Next.js app: sign-in, agent console with live execution detail, approval inbox, workflows, usage, organization members. The access token is held in memory only. |
+| **Deployment** | Multi-stage production images, a separate deployed Compose stack, migrations as a one-shot job, and a runbook. |
+
+### Not implemented
+
+Stated plainly, because the repository contains placeholders for some of it:
+
+- **Document retrieval (RAG).** There is a `documents` table holding metadata
+  and an empty `app/knowledge/` package. No upload, extraction, chunking,
+  embedding or vector search exists.
+- **An audit API or UI.** Audit events are written to the database; nothing
+  reads them back over HTTP yet.
+- **PostgreSQL row-level security.** Tenant isolation is enforced in the
+  repository layer and by database constraints, not by RLS policies.
+- **Token revocation, user invitations, password reset, billing, rate
+  limiting.**
 
 ---
+
+## How it fits together
+
+```
+  Browser ──► Next.js console ──► FastAPI
+                                    │
+              ┌─────────────────────┼─────────────────────┐
+              ▼                     ▼                     ▼
+        Agent runtime         Workflow engine       Approval service
+              │                     │                     │
+              └─────────┬───────────┴──────────┬──────────┘
+                        ▼                      ▼
+                  Tool executor           LLM gateway
+                        │                      │
+                        ▼                      ▼
+                   PostgreSQL          Anthropic / OpenAI
+```
+
+A **modular monolith**: one deployable, layered by responsibility
+(`api → services → repositories → models`), with the agent runtime, tool
+framework, workflow engine and observability as peer packages. No
+microservices, no queue, no Kubernetes.
+
+The rules that hold it together:
+
+- **The model is untrusted input.** Its output selects a tool by name and
+  supplies arguments; both are validated before anything runs.
+- **Nothing is trusted from the client.** Tenant, identity and role are
+  resolved server-side on every request.
+- **No transaction is held across an LLM call, a tool call, or a human wait.**
+- **Metadata and content are stored separately.** Operational tables hold ids,
+  counts, codes and timings; conversation content lives apart from them.
+
+Full design: [docs/architecture.md](docs/architecture.md).
+
+## Security and tenant isolation
+
+| | |
+| --- | --- |
+| Tenant filter | One place — the scoped repository base class |
+| Cross-tenant references | Composite foreign keys `(id, organization_id)`; unrepresentable, not merely checked |
+| Active organization | `X-Organization-ID`, verified against membership on every request; it selects, it never grants |
+| Passwords | Argon2id above the OWASP minimum |
+| Tokens | JWT, HMAC only — algorithm confusion is refused by configuration |
+| Browser storage | None. No token in `localStorage`, `sessionStorage`, cookies or IndexedDB |
+| Secrets | Environment only. Never in an image, a log, a health response, a metric or a span |
+| Telemetry | No tenant id, no execution id, no prompt, no tool argument, no result |
+| Deployed start-up | Refuses the shipped JWT secret, the shipped database password, `DEBUG`, and wildcard CORS |
+
+Verified by tests, including cross-tenant access attempts and assertions that
+telemetry carries no identifier.
 
 ## Technology
 
-**Backend** — Python 3.12 · FastAPI · SQLAlchemy 2.x · PostgreSQL · Pydantic v2 · Alembic · Redis
-**Frontend** — Next.js · TypeScript · Tailwind CSS · shadcn/ui
-**AI** — Anthropic Claude API · Claude tool use · RAG · embeddings
-**Infrastructure** — Docker Compose
-**Testing** — pytest
+| | |
+| --- | --- |
+| Backend | Python 3.12 · FastAPI · SQLAlchemy 2.x (async) · PostgreSQL 17 · Pydantic v2 · Alembic |
+| Frontend | Next.js 15 · React 19 · TypeScript · Tailwind CSS v4 |
+| AI | Anthropic and OpenAI behind one provider-independent gateway |
+| Infrastructure | Docker Compose |
+| Testing | pytest · Node's built-in test runner |
 
-Architecture is a **modular monolith**. No microservices, no Kubernetes.
-
----
-
-## Repository layout
-
-```
-ai-operations-agent/
-├── backend/                   # FastAPI modular monolith (Python 3.12)
-│   ├── app/
-│   │   ├── main.py            # application factory
-│   │   ├── api/               # routers; health probes + versioned v1 API
-│   │   ├── core/              # config, database, logging, middleware, errors
-│   │   ├── models/            # SQLAlchemy models
-│   │   ├── schemas/           # Pydantic v2 contracts
-│   │   ├── repositories/      # data access
-│   │   ├── services/          # business logic
-│   │   └── agents,tools,workflows,knowledge,audit/   # planned areas
-│   ├── alembic/               # database migrations
-│   ├── tests/                 # unit + integration (pytest)
-│   ├── .env.example           # native development settings
-│   └── requirements*.txt      # runtime and development dependencies
-├── frontend/                  # Next.js App Router dashboard (TypeScript)
-│   ├── src/app/               # routes, layout, global styles
-│   ├── src/components/        # UI, incl. shadcn/ui primitives later
-│   ├── src/hooks/             # reusable client-side behaviour
-│   ├── src/lib/               # API client, session, configuration
-│   ├── src/types/             # shared TypeScript types
-│   └── .env.example           # native development settings
-├── infrastructure/
-│   ├── docker/backend/        # backend Dockerfile (development | production)
-│   ├── docker/frontend/       # frontend Dockerfile (development | production)
-│   └── postgres/init/         # extensions created on first start
-├── docs/                      # architecture, deployment, Windows setup, ADRs
-├── .github/workflows/         # continuous integration
-├── docker-compose.yml         # local development stack
-├── docker-compose.prod.yml    # deployed stack
-├── .env.example               # environment template for Docker
-├── .env.production.example    # environment template for a deployment
-└── LICENSE                    # MIT
-```
-
-Read [docs/architecture.md](docs/architecture.md) for the design in full, and
-[docs/development-windows.md](docs/development-windows.md) to work without Docker.
+Redis is in the stack for later use; today it backs the readiness check only.
 
 ---
 
-## Getting started
+## Quick start
 
-Two supported setups. They run the same code and the same settings — only the
-hostnames and the `.env` file differ.
+### Docker Compose
 
-### Option A — Docker Compose
-
-Requires Docker and Docker Compose. Nothing else: no local Python or Node.
+Requires Docker and Docker Compose. Nothing else.
 
 ```bash
 git clone https://github.com/BelgdevKing/ai-operations-agent.git
 cd ai-operations-agent
-
 docker compose up --build
 ```
 
-| Service | URL | Notes |
-| --- | --- | --- |
-| Frontend | http://localhost:3000 | Next.js dev server, hot reload |
-| Backend | http://localhost:8000 | FastAPI, auto-reload |
-| API docs | http://localhost:8000/docs | Generated OpenAPI UI |
-| Liveness | http://localhost:8000/health | `{"status":"ok", ...}` |
-| Readiness | http://localhost:8000/health/ready | 503 until Postgres and Redis answer |
-| PostgreSQL | `localhost:5432` | user/db `aiops`, persistent volume |
-| Redis | `localhost:6379` | persistent volume |
+Every setting has a working default, so this starts on a fresh checkout. To
+override anything, `cp .env.example .env` and edit it.
 
-Every setting has a working default, so the stack starts on a fresh checkout.
-To override anything, `cp .env.example .env` and edit — Compose reads `.env`
-automatically. Never commit `.env`; secrets come from the environment only.
-
-Common tasks:
+| | |
+| --- | --- |
+| Console | http://localhost:3000 |
+| API | http://localhost:8000 |
+| API docs | http://localhost:8000/docs |
+| Liveness | http://localhost:8000/health |
+| Readiness | http://localhost:8000/health/ready |
 
 ```bash
-docker compose ps                       # status and health of each container
-docker compose logs -f backend          # follow one service
-docker compose exec backend pytest      # run the backend test suite
-docker compose down                     # stop, keep data
-docker compose down -v                  # stop and delete all data
+docker compose exec backend alembic upgrade head   # create the schema
+docker compose exec backend pytest                 # run the suite
+docker compose logs -f backend
+docker compose down                                # add -v to delete data
 ```
 
-### Option B — Native, no Docker
+### Native
 
-Requires Python 3.12, Node.js and a PostgreSQL install running on `localhost`.
-**Redis is not needed** — nothing implemented so far uses it, and the backend
-starts and reports ready without it.
+Requires Python 3.12, Node.js 18.18 or newer (CI and the container image use
+22) and a PostgreSQL you can connect to. Backend:
 
-Backend, in one terminal:
-
-```powershell
+```bash
 cd backend
-py -3.12 -m venv .venv
-.venv\Scripts\activate
+py -3.12 -m venv .venv          # python3 -m venv .venv on macOS/Linux
+.venv\Scripts\activate          # source .venv/bin/activate
 pip install -r requirements-dev.txt
+cp .env.example .env            # then set DATABASE_URL
+alembic upgrade head            # required - nothing creates the schema for you
 uvicorn app.main:app --reload
 ```
 
-Frontend, in another:
+Frontend, in a second terminal:
 
-```powershell
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-One-time database setup, environment files, shell-specific activation and
-troubleshooting are covered in
-**[docs/development-windows.md](docs/development-windows.md)**.
+Creating the database, shell-specific activation and troubleshooting:
+[docs/development-windows.md](docs/development-windows.md).
 
-### Deploying it
+### Configuration
 
-`docker-compose.yml` is development: it bind-mounts source, reloads on change,
-and every value has a working default so a fresh checkout starts. None of that
-belongs in a deployment, so a deployment has its own stack.
+Every setting has a default and is documented in
+[backend/.env.example](backend/.env.example), and in
+[.env.example](.env.example) for the Docker stack. The ones that matter first:
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | local PostgreSQL | Must start `postgresql+asyncpg://` |
+| `ANTHROPIC_API_KEY` | unset | Needed only to *execute* an agent |
+| `LLM_PROVIDER` | `anthropic` | Or `openai` |
+| `JWT_SECRET_KEY` | development default | A deployed environment refuses to start on it |
+| `METRICS_ENABLED` | `false` | Requires `METRICS_TOKEN` when true |
+| `TRACING_ENABLED` | `false` | Spans to the log, using OpenTelemetry field names |
+
+The application starts without a model provider key. Everything except running
+an agent works; a run then fails with a clear configuration error.
+
+---
+
+## See it working in five minutes
+
+The repository ships a demo dataset — two organizations with customers,
+shipments, charges and invoices — so there is something for an agent to answer
+questions about.
+
+**1. Create an account** at http://localhost:3000/register, or over the API:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"a-long-password",
+       "organization_name":"Acme Operations"}'
+```
+
+Registration returns the user and the organization it created. Sign in
+separately for a token.
+
+**2. Load the demo data** and attach your account to it:
+
+```bash
+cd backend
+python -m scripts.seed_demo_data --attach-user you@example.com
+```
+
+Idempotent — every row's id derives from its business key — and it refuses to
+run unless `APP_ENV=development`.
+
+**3. Open the console** at http://localhost:3000/ai, pick **Operations
+assistant**, and ask:
+
+> Check shipment ABC123 and tell me if there are outstanding charges.
+
+The agent calls `get_shipment` and `get_shipment_charges`, then answers. The
+execution panel shows the step count, tool calls, tokens and model time, and
+each tool call with its outcome.
+
+**4. Ask for something destructive:**
+
+> Cancel shipment ABC123.
+
+`cancel_shipment` is declared `destructive`, so the run **stops**. Its status
+becomes `awaiting_approval` and an approval appears at
+http://localhost:3000/approvals showing the action, the subject and an
+allow-listed summary of the arguments — never the raw tool payload.
+
+**5. Approve or reject it.** Approving resumes the same run and the shipment is
+cancelled exactly once; rejecting resumes it too, and the agent reports that
+nothing was cancelled. Either way the decision, who made it and when are
+durable.
+
+**6. See what it cost** at http://localhost:3000/dashboard, or:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/ai/usage
+```
+
+Runs, tool executions, approvals and tokens for your organization. Cost appears
+once `LLM_PRICING` is configured; until then it reports *unknown* rather than
+guessing.
+
+**7. Optional — watch the machinery.** With `TRACING_ENABLED=true`, one request
+produces a span tree: the HTTP request, the agent run, each model call, each
+tool execution. With `METRICS_ENABLED=true` and a `METRICS_TOKEN`, `/metrics`
+serves Prometheus text.
+
+Steps 1, 2, 6 and 7 need no model provider credential. Steps 3 to 5 do.
+
+---
+
+## Development
+
+```bash
+# Backend
+cd backend
+ruff check app tests scripts
+ruff format --check app tests scripts
+mypy                              # strict; every function typed
+alembic check                     # models and schema agree
+pytest                            # 1,781 tests
+
+# Frontend
+cd frontend
+npm run lint
+npm run typecheck
+npm test                          # 293 tests, Node's built-in runner
+npm run build
+```
+
+Integration tests need a reachable PostgreSQL and skip themselves without one.
+CI runs all of the above plus both production image builds — see
+[.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
+Reporting a vulnerability: [SECURITY.md](SECURITY.md).
+
+## Deployment
+
+`docker-compose.yml` is development — bind mounts, hot reload, working
+defaults. A deployment has its own stack:
 
 ```bash
 cp .env.production.example .env.production   # placeholders only; fill it in
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 ```
 
-Runtime-only images, migrations as a step of their own, no host ports on the
+Runtime-only images, migrations as their own job, no host ports on the
 database, and a deployed environment that refuses to start on any secret this
-repository publishes. The procedure, the configuration, the rollback and what
-to do when something is wrong are in
-**[docs/deployment.md](docs/deployment.md)**.
+repository publishes. Procedure, rollback, backups and troubleshooting:
+[docs/deployment.md](docs/deployment.md).
+
+---
+
+## Project status
+
+**Implemented and tested; not hardened by real traffic.** The platform runs end
+to end locally and in a Compose deployment. It has never been run against
+production load, has had no security audit, and has no users.
+
+| | |
+| --- | --- |
+| Tests | 1,781 backend · 293 frontend |
+| API routes | 30 |
+| Database tables | 23, across 7 migrations |
+| Built-in tools | 5 — four read-only, one destructive |
+| Built-in agents | 1 |
+
+Verified locally: the full test suite, type checking, linting, the migration
+chain, and the authenticated API surface exercised end to end without a model
+credential. **Not verified:** browser testing (no browser in the development
+environment), live model-provider calls (no credential configured), container
+image builds (no Docker daemon in the development environment — CI covers
+them), load testing, penetration testing.
 
 ## Roadmap
 
-Each phase is a working slice, built in order.
+Built in order, each a working slice:
 
-- [x] **0 — Scaffolding.** Repository structure, architecture docs.
-- [x] **1 — Local environment.** Docker Compose stack (FastAPI, Next.js,
-      PostgreSQL, Redis), health endpoints, homepage, pytest harness, plus a
-      native Windows setup without Docker.
-- [x] **2 — Backend foundation.** Configuration, database and session
-      management, API router structure, exception handling, structured
-      logging, Alembic migrations, typed throughout.
-- [x] **3 — Application schema.** 15 tables, tenant discriminator on every
-      tenant-owned table, one Alembic migration.
-- [x] **4 — Identity and tenancy.** Argon2id passwords, JWT access tokens,
-      registration and login, organization membership with owner/admin/member
-      roles, and the tenant-scoped repository pattern.
-- [x] **LLM gateway.** Provider-independent abstraction over Anthropic and
-      OpenAI behind a single gateway with explicit retry policy, plus an
-      authenticated `POST /api/v1/ai/generate`. Built ahead of the phases below,
-      which the agent work depends on.
-- [x] **Frontend foundation.** App Router shell and routes, a single API
-      client with the shared error envelope, and TypeScript types mirroring the
-      backend contracts. Built ahead of the dashboard phase below.
-- [x] **Frontend authentication.** Sign-in, registration, guarded routes, the
-      current user, and organization membership administration against the
-      identity API. The access token is held in memory only, so a reload signs
-      you out - see [frontend/README.md](frontend/README.md#authentication).
-- [x] **AI workspace.** A `/ai` screen that sends a conversation through the
-      existing generation endpoint and shows the answer. Conversations are
-      held in the browser only; there is no persistence yet.
-- [ ] **5 — Business data.** The CRUD and search surface agents will query,
-      plus row-level security behind the scoped repositories.
-- [ ] **6 — Documents.** Upload, storage, chunking, embeddings, vector search.
-- [ ] **7 — Agent core.** Claude tool-use loop, tool registry, run records.
-- [ ] **8 — Approvals.** Sensitive-action gate, approval queue, resume-on-approve.
-- [ ] **9 — Workflows.** Multi-step definitions run as durable background jobs.
-- [ ] **10 — Audit & monitoring.** Immutable audit trail, run traces, cost metrics.
-- [ ] **11 — Dashboard.** Next.js UI over all of the above.
+- [x] Scaffolding, local environment, backend foundation, application schema
+- [x] Identity and multi-tenancy
+- [x] LLM gateway — Anthropic and OpenAI behind one interface
+- [x] Frontend foundation, authentication and workspace
+- [x] Business data and the scoped repository pattern
+- [x] Agent core — tool-use loop, tool registry, durable run records
+- [x] Conversation persistence
+- [x] Workflow engine — durable multi-step execution
+- [x] Human-in-the-loop approvals
+- [x] Observability, cost and usage accounting
+- [x] Frontend Agent Console
+- [x] Production deployment, CI, and reliability hardening
+
+Not started:
+
+- [ ] Documents and retrieval — upload, chunking, embeddings, vector search
+- [ ] An audit API and UI over the audit trail that is already recorded
+- [ ] Rate limiting and per-tenant quotas
+- [ ] User invitations and password reset
+
+---
+
+## Commercial
+
+The platform is MIT licensed and self-hostable in full. There is **no paid
+tier, no hosted service and no support contract today** — if any appear, they
+will be listed here.
+
+The kinds of work this codebase is a reasonable starting point for:
+
+- **Deployment and integration** — standing it up, connecting it to real
+  operational systems, replacing the demo tools with yours.
+- **Custom tools, agents and workflows** — the tool registry and the workflow
+  definition format are the extension points.
+- **Architecture review** — tenant isolation, approval semantics and agent
+  safety, for teams building something similar.
+
+> **Open decision:** no contact route is published in this repository yet.
+> Until one is, GitHub Issues is the way to reach the maintainer. See
+> [Decisions not yet made](#decisions-not-yet-made).
+
+No customers, revenue, partnerships or production deployments exist. Nothing
+here should be read as implying otherwise.
+
+## Decisions not yet made
+
+Recorded openly rather than answered with a placeholder:
+
+- A contact address or form for commercial enquiries and security reports.
+- Whether to publish a hosted version, and on what terms.
+- Whether the project moves to a GitHub organization, and keeps this name.
+- Whether to adopt a code of conduct — deferred until there are contributors
+  for one to govern.
 
 ## License
 

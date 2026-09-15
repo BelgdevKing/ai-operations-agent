@@ -174,13 +174,17 @@ Answers are rendered as **plain text**, preserving line breaks. No Markdown and
 no HTML: rendering a model's output as markup is how an injected instruction
 becomes an injected element, and no Markdown dependency is worth that.
 
-### Conversations are not saved
+### Conversations are saved on the server
 
-The conversation lives in React state in one tab. **There is no persistence** —
-no conversation table, no server-side conversation id, no history endpoint —
-because the generate endpoint is stateless and takes the whole message list
-every time. Reloading the page starts a new conversation, consistent with the
-in-memory session.
+A run started through an agent writes a conversation and its messages to the
+database, so the console can list earlier conversations and reopen one — see
+`GET /api/v1/ai/conversations`. The transcript on screen is still React state
+for the session you are in; what makes it durable is the server's copy, not the
+browser's.
+
+The stateless `POST /ai/generate` path is unchanged and still takes the whole
+message list every time. It is the lower-level endpoint the workspace was first
+built on, and it persists nothing by design.
 
 The size limits from `app/schemas/ai.py` are mirrored in
 `src/lib/ai/conversation.ts` so a conversation that has outgrown the endpoint
@@ -241,16 +245,18 @@ secret and database credentials belong to the backend environment only.
 inlined at build time - restart the dev server after changing one. Full setup
 notes: [docs/development-windows.md](../docs/development-windows.md).
 
-## Planned screens
+## Screens
 
-| Screen | Purpose |
-| --- | --- |
-| Conversations | Talk to an agent; watch a run stream |
-| Runs | Execution history with step-by-step traces |
-| Approvals | Queue of pending sensitive actions to approve or reject |
-| Documents | Upload and ingestion status for the knowledge base |
-| Workflows | Definitions and execution state |
-| Audit | Searchable immutable activity log |
+| Screen | Route | Status |
+| --- | --- | --- |
+| Agent console | `/ai` | Built — agent and conversation pickers, transcript, execution detail, tool activity, approval panel |
+| Approvals | `/approvals` | Built — pending queue, safe action summary, approve or reject |
+| Workflows | `/workflows` | Built — definitions and run state |
+| Dashboard | `/dashboard` | Built — the usage and cost summary |
+| Organization | `/organization` | Built — members and roles |
+| Settings | `/settings` | Built — the build configuration this bundle was compiled with |
+| Documents | – | Not built; the backend has no ingestion or retrieval yet |
+| Audit | – | Not built; events are recorded but no API reads them back |
 
 ## Rules
 

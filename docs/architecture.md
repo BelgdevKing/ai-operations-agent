@@ -1,9 +1,14 @@
 # Architecture
 
-**Status:** partly built. The backend foundation exists - configuration,
-database and session management, the API router structure, exception handling,
-structured logging, health endpoints and Alembic migrations. Sections marked
-*planned* are the design the rest of the code will be built toward.
+**Status:** most of this is built. Identity and multi-tenancy, the LLM
+gateway, agent execution, the tool framework, workflows, approvals, usage and
+cost accounting, metrics, tracing and the console are all implemented and
+covered by tests. Each section below says which it is.
+
+Retrieval (section 8) is the substantial part that is **not** built: there is a
+`documents` table holding metadata and an empty `app/knowledge/` package, and
+nothing else. Where this document and the code disagree, the code is right -
+please open an issue.
 
 ---
 
@@ -125,11 +130,13 @@ backend/app/
 ├── schemas/        Pydantic v2 request/response contracts
 ├── repositories/   data access; every query goes through one of these
 ├── services/       business logic, orchestration, policy checks
-├── agents/         Claude tool-use loop, run records          (not built yet)
-├── tools/          the tool registry an agent may call        (not built yet)
-├── workflows/      workflow definitions and state machine     (not built yet)
+├── agents/         the tool-use loop, run state, cancellation
+├── tools/          the tool registry, the executor, the business tools
+├── workflows/      workflow definitions and the state machine
+├── observability/  metrics, tracing, the price book, the shared vocabulary
+├── demo/           the demo dataset
 ├── knowledge/      document ingestion and retrieval (RAG)     (not built yet)
-└── audit/          append-only audit trail and run traces     (not built yet)
+└── audit/          append-only audit trail (recorded; no API over it yet)
 ```
 
 A request moves down the layers and back:
@@ -265,7 +272,7 @@ layer, so services never import `HTTPException`.
 
 ---
 
-## 7. Agent execution (planned)
+## 7. Agent execution (implemented)
 
 An agent run is a bounded loop around the Claude API using **Claude tool use**.
 
@@ -316,7 +323,7 @@ Design points:
 
 ---
 
-## 8. Retrieval (RAG, planned)
+## 8. Retrieval (RAG - not built)
 
 **Ingestion:** upload → store file → extract text → chunk (size and overlap from
 config) → embed each chunk → persist chunk and vector with `tenant_id`. This runs
@@ -333,7 +340,7 @@ every other query. Revisit only if recall or latency demands it.
 
 ---
 
-## 9. Approvals and workflows (planned)
+## 9. Approvals and workflows (implemented)
 
 **Approvals.** A tool or workflow step marked sensitive creates an approval
 request instead of executing. The request records who asked, what action, with
@@ -349,7 +356,11 @@ are driven by Redis-backed background workers rather than the request thread.
 
 ---
 
-## 10. Audit and monitoring (planned)
+## 10. Audit and monitoring (implemented in part)
+
+The audit trail is written and the observability described below is built. What
+is **not** built is any way to read the audit trail back: there is no audit
+endpoint and no audit screen. Retention by partitioning is design, not code.
 
 **Audit log.** Append-only. Each entry holds tenant, actor (user or agent), the
 action, the target entity, before/after state where applicable, a correlation id
