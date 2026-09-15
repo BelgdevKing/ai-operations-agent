@@ -33,6 +33,11 @@ from app.agents.models import ACTIVE_STATUSES, AgentRunStatus
 from app.models.agent_run import AgentRunRecord, AgentStepRecord, ToolExecutionRecord
 from app.repositories.tenant import TenantScopedRepository
 
+CANCELLED_ERROR_CODE = "agent_run_cancelled"
+CANCELLED_ERROR_MESSAGE = (
+    "Somebody stopped this run while it was waiting for approval. Nothing was performed."
+)
+
 ABANDONED_ERROR_CODE = "agent_run_abandoned"
 """Why a run that nobody is driving any more is marked failed."""
 
@@ -165,6 +170,41 @@ class AgentRunRepository(TenantScopedRepository[AgentRunRecord]):
         )
         result = cast("CursorResult[Any]", await self.session.execute(statement))
         return result.rowcount or 0
+
+    async def cancel_paused(self, run_id: uuid.UUID) -> bool:
+        """Stop a run that is waiting on a person, if it is still waiting.
+
+        ``awaiting_approval`` is the only state this will leave, and that is the
+        whole design. A ``running`` run is being driven by another request right
+        now, and cancelling it durably would leave that request writing steps
+        into a run the database says is over; the in-request
+        :class:`~app.agents.cancellation.CancellationToken` is what stops those,
+        and it is a different mechanism for a different situation. A paused run
+        has nothing in flight, which is exactly why it is safe to end here.
+
+        The state is in the ``WHERE`` clause for the same reason it is in
+        ``ApprovalRepository.decide``: cancelling and approving are two people
+        acting on one row at the same moment, and one of them has to lose.
+
+        Returns True when this call cancelled the run.
+        """
+        statement = (
+            update(AgentRunRecord)
+            .where(
+                AgentRunRecord.id == run_id,
+                AgentRunRecord.organization_id == self.organization_id,
+                AgentRunRecord.status == AgentRunStatus.AWAITING_APPROVAL,
+            )
+            .values(
+                status=AgentRunStatus.CANCELLED,
+                error_code=CANCELLED_ERROR_CODE,
+                error_message=CANCELLED_ERROR_MESSAGE,
+                completed_at=func.now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast("CursorResult[Any]", await self.session.execute(statement))
+        return (result.rowcount or 0) == 1
 
 
 class AgentStepRepository(TenantScopedRepository[AgentStepRecord]):

@@ -42,6 +42,8 @@ import logging
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
+from typing import NoReturn
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,7 +57,7 @@ from app.agents.runtime import AgentRuntime
 from app.ai.exceptions import LLMError
 from app.ai.models import LLMMessage
 from app.core.config import Settings
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import AppError, ConflictError, NotFoundError, ValidationError
 from app.models.agent_run import AgentRunRecord
 from app.models.approval import Approval
 from app.models.enums import ApprovalStatus
@@ -68,12 +70,14 @@ from app.repositories.conversation import (
     to_llm_messages,
 )
 from app.services.agent_execution import AgentExecutionService, RunView, build_carryover
+from app.services.approval_expiry import expire_due
 from app.services.audit import record_agent_run, record_approval_decision
 from app.services.run_journal import DatabaseRunJournal
 from app.services.workflow_execution import WorkflowRunView, WorkflowService
 from app.tools.executor import ToolExecutor
 from app.tools.models import ApprovalGrant, ToolRequest, ToolResult
 from app.tools.registry import ToolRegistry
+from app.tools.summary import plain_text
 from app.workflows.exceptions import WorkflowRunNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -101,6 +105,55 @@ class ApprovalAlreadyDecidedError(ConflictError):
 
     code = "approval_already_decided"
     message = "That approval has already been decided."
+
+
+MAX_DECISION_REASON_CHARACTERS = 500
+"""Matches ``approvals.decision_reason``. The schema refuses anything longer."""
+
+
+def clean_decision_reason(reason: str | None) -> str | None:
+    """What a person wrote, reduced to something safe to store and show again.
+
+    Untrusted in the ordinary way - it arrives in a request body - and treated
+    like every other untrusted string here: stripped of control characters,
+    collapsed to single spaces, bounded. A reason that is nothing but whitespace
+    becomes ``None`` rather than an empty string, so "no reason given" has one
+    representation instead of two.
+    """
+    if reason is None:
+        return None
+
+    cleaned = plain_text(reason, limit=MAX_DECISION_REASON_CHARACTERS)
+    return cleaned or None
+
+
+class ApprovalInvalidCursorError(ValidationError):
+    """The page cursor is not an approval this organization has.
+
+    422 and a message that says nothing about which of the two it was. An id
+    from another tenant and an id that never existed get the same answer, so
+    paging cannot be turned into a way of asking whether somebody else's
+    approval is real.
+    """
+
+    code = "approval_invalid_cursor"
+    message = "That page cursor is not valid for this organization."
+
+
+class ApprovalExpiredError(AppError):
+    """Nobody answered in time.
+
+    410 rather than 409: the approval is not in conflict with anything, it is
+    gone - the deadline it was given has passed, the action it gated will never
+    run under it, and the run it paused has been stopped. A distinct status
+    because a client should not offer "try again" for this the way it might for
+    a conflict, and a distinct code because "expired" and "already decided" are
+    different things to tell a person who is looking at a stale screen.
+    """
+
+    status_code = 410
+    code = "approval_expired"
+    message = "That approval expired before it was decided."
 
 
 class ApprovalNotResumableError(ConflictError):
@@ -173,7 +226,40 @@ class ApprovalService:
 
     async def list_pending(self, *, limit: int = 50) -> Sequence[Approval]:
         """This organization's approval queue."""
-        return await self._approvals.list_pending(limit=limit)
+        return await self.list_queue(statuses=(ApprovalStatus.PENDING,), limit=limit)
+
+    async def list_queue(
+        self,
+        *,
+        statuses: Sequence[ApprovalStatus] = (),
+        tool_name: str | None = None,
+        limit: int = 50,
+        cursor: uuid.UUID | None = None,
+    ) -> Sequence[Approval]:
+        """One page of this organization's approvals, oldest first.
+
+        Overdue approvals are lapsed before the page is read, so the queue a
+        person is looking at does not offer them a decision the decision path
+        would then refuse. This is the closest thing the architecture has to a
+        background worker: there isn't one, and the moment somebody looks at the
+        queue is the moment it is worth paying for a sweep.
+
+        Raises:
+            ApprovalInvalidCursorError: The cursor is not one of this
+                organization's approvals - which is the same answer whether it
+                never existed or belongs to somebody else.
+        """
+        await expire_due(self._session, organization_id=self._organization_id)
+
+        after: Approval | None = None
+        if cursor is not None:
+            after = await self._approvals.get(cursor)
+            if after is None:
+                raise ApprovalInvalidCursorError()
+
+        return await self._approvals.list_queue(
+            statuses=statuses, tool_name=tool_name, limit=limit, after=after
+        )
 
     async def get(self, approval_id: uuid.UUID) -> Approval:
         """One of this organization's approvals."""
@@ -189,6 +275,7 @@ class ApprovalService:
         approval_id: uuid.UUID,
         *,
         approve: bool,
+        reason: str | None = None,
         cancellation: CancellationToken = NEVER_CANCELLED,
     ) -> ApprovalDecision:
         """Record a decision and carry whatever was waiting forward.
@@ -197,17 +284,35 @@ class ApprovalService:
         admin role, and that is the security boundary. Nothing here consults a
         button, a flag sent by a browser, or anything else the client controls.
 
+        **Nothing about the action comes from the caller.** The tool, the
+        execution, the run and the organization are all read from the persisted
+        approval; the only thing this call contributes is which way the decision
+        went and, optionally, a sentence about why. Fetching an approval,
+        altering what it proposed and submitting it is therefore not a request
+        this API can express - there is no field for it.
+
+        Args:
+            approve: Which decision. Comes from the route, not from a body.
+            reason: What the person wrote, if anything. Untrusted free text;
+                bounded and reduced to plain text before it is stored.
+
         Raises:
             ApprovalNotFoundError: Not this organization's approval.
             ApprovalAlreadyDecidedError: It was already decided.
+            ApprovalExpiredError: Nobody answered before the deadline.
             ApprovalNotResumableError: The decision stands; the run cannot go on.
         """
         approval = await self.get(approval_id)
 
         decision = ApprovalStatus.APPROVED if approve else ApprovalStatus.REJECTED
-        won = await self._approvals.decide(approval.id, decision=decision, decided_by=self._user_id)
+        won = await self._approvals.decide(
+            approval.id,
+            decision=decision,
+            decided_by=self._user_id,
+            reason=clean_decision_reason(reason),
+        )
         if not won:
-            raise ApprovalAlreadyDecidedError()
+            await self._explain_refusal(approval.id)
 
         # Committed before anything is executed. A decision that is recorded and
         # then lost would be the one failure mode nobody could reconstruct.
@@ -250,6 +355,34 @@ class ApprovalService:
             raise ApprovalNotResumableError()
 
         return ApprovalDecision(approval=decided, agent_run=agent_run, workflow_run=workflow_run)
+
+    async def _explain_refusal(self, approval_id: uuid.UUID) -> NoReturn:
+        """Say which of the two ways the conditional update was lost.
+
+        ``decide`` guards on both the state and the deadline, so a False means
+        "somebody else decided it" or "it lapsed" and the statement cannot say
+        which. The row can, in three cases rather than two:
+
+        * already ``expired`` - a sweep got here first, and this is 410;
+        * still ``pending`` - then it was the clock that refused the update, so
+          it is expired now, in passing, because the run behind it has to stop
+          and this request is already looking at it;
+        * anything else - a decision, or a cancellation, got there first.
+
+        The first case is the one worth spelling out. "Already decided" would be
+        *false* about a lapsed approval: nobody decided it, and a person looking
+        at a stale screen deserves to be told which of those happened.
+        """
+        current = await self.get(approval_id)
+
+        if current.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError()
+
+        if current.status is not ApprovalStatus.PENDING:
+            raise ApprovalAlreadyDecidedError()
+
+        await expire_due(self._session, organization_id=self._organization_id)
+        raise ApprovalExpiredError()
 
     async def _resume_workflow(self, approval: Approval, *, approve: bool) -> WorkflowRunView:
         """Carry the paused workflow forward.
@@ -327,6 +460,7 @@ class ApprovalService:
             record=record,
             conversation_id=record.conversation_id,
             registry=self._tools,
+            approval_expires_after=timedelta(seconds=self._settings.approval_expiration_seconds),
         )
 
         await journal.record_tool(
@@ -397,6 +531,6 @@ class ApprovalService:
     async def _view(self, record: AgentRunRecord) -> RunView:
         """The run as a client sees it, projected by the execution service."""
         execution = AgentExecutionService(
-            self._session, self._runtime(), self._settings, self._membership, self._tools
+            self._session, self._runtime, self._settings, self._membership, self._tools
         )
         return await execution.get(record.id)

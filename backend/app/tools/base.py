@@ -60,6 +60,7 @@ class Tool[InputT: BaseModel, OutputT: BaseModel](abc.ABC):
                 )
 
         _reject_reserved_fields(cls)
+        _check_approval_summary(cls)
 
     @abc.abstractmethod
     async def execute(self, arguments: InputT, context: ToolExecutionContext) -> OutputT:
@@ -102,4 +103,28 @@ def _reject_reserved_fields(tool: type[Tool[Any, Any]]) -> None:
         raise ToolRegistrationError(
             f"{tool.__name__} declares reserved argument(s): {names}. "
             "Identity comes from the execution context, not from arguments."
+        )
+
+
+def _check_approval_summary(tool: type[Tool[Any, Any]]) -> None:
+    """Refuse a tool whose approval summary names an argument it does not take.
+
+    The summary is an allow-list read at approval time, when nothing is left to
+    validate it against - a misspelt field would simply render as absent, and
+    the reviewer would see a smaller summary than the author intended with
+    nothing anywhere saying why. Import time is where that is still a typo.
+    """
+    summary = tool.metadata.approval_summary
+    if summary is None:
+        return
+
+    declared = set(tool.input_model.model_fields)
+    unknown = [name for name in summary.named_fields if name not in declared]
+
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ToolRegistrationError(
+            f"{tool.__name__} declares an approval summary over unknown "
+            f"argument(s): {names}. A summary may only name fields of "
+            f"{tool.input_model.__name__}."
         )

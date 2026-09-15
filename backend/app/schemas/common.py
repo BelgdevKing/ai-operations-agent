@@ -42,3 +42,21 @@ class Page[ItemT](BaseModel):
     @property
     def has_more(self) -> bool:
         return self.offset + len(self.items) < self.total
+
+
+class ApprovalField(BaseModel):
+    """One labelled value from a tool's declared approval summary.
+
+    Here rather than in ``schemas/approval.py`` because three response models
+    carry it - the approval itself, the paused agent run, and the paused
+    workflow run - and the approval module already imports the other two.
+
+    Both halves are plain text of bounded length by the time they are stored:
+    the label is derived from a field name a tool author wrote, and the value
+    was stripped of control characters and truncated when the approval was
+    requested. There is nothing to escape here beyond what rendering text as
+    text already does.
+    """
+
+    label: str
+    value: str

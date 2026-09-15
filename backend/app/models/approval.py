@@ -26,6 +26,22 @@ content store, and the durable record of an approved execution is the
 ``tool_execution_id`` - so approving replays the original call by its identity
 rather than by copying its arguments into a second place. A workflow approval
 may still use the column; nothing the agent writes does, and a test asserts it.
+
+The human-in-the-loop phase added three more, and none of them weakens that::
+
+    summary          a fixed phrase plus the subject, e.g. "Cancel shipment ABC123"
+    summary_fields   the allow-listed label/value pairs behind it
+    decision_reason  what the person who decided wrote, if they wrote anything
+
+``summary_fields`` is the one worth reading twice, because it looks like the
+thing the paragraph above refuses to store. It is not. The arguments are never
+projected wholesale: a tool declares, in code, which of its own fields an
+approver may see (:class:`app.tools.summary.ApprovalSummary`), and only those
+are rendered - as bounded plain text, once, when the approval is requested. The
+record therefore does not hold the payload with some fields hidden; it holds a
+projection the rest of the payload was never part of. A tool that declares
+nothing gets an approval that names the tool and nothing else, exactly as
+before.
 """
 
 from __future__ import annotations
@@ -124,7 +140,32 @@ class Approval(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Bas
     )
 
     # Why the action was gated, shown to the approver.
+    #
+    # Established by the framework - a tool's safety classification, or the
+    # reason a workflow definition declares for its approval step. Never a
+    # sentence a model wrote about its own authority: a model asserting that it
+    # needs approval is not what gates anything, and a model asserting that it
+    # does not would be worse.
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # What is being proposed, in one line. Built from the tool's own
+    # declaration; see the module docstring.
+    summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # The labelled values behind that line: [{"label": ..., "value": ...}].
+    # A list rather than an object so the tool's declared order survives, which
+    # is the order the author thought a reviewer should read them in.
+    summary_fields: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+
+    # What the deciding person wrote, if anything. Optional, bounded, and
+    # stripped to plain text before it is stored - it is free text from a
+    # browser, and it is read back by everyone who can see the queue.
+    decision_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     status: Mapped[ApprovalStatus] = mapped_column(
         enum_column(ApprovalStatus, "status"),

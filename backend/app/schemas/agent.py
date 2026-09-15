@@ -34,6 +34,7 @@ from app.agents.models import AgentRunStatus
 from app.ai.models import LLMMessage, LLMRole
 from app.models.conversation import Conversation, Message
 from app.models.enums import MessageRole
+from app.schemas.common import ApprovalField
 from app.services.agent_execution import RunView
 from app.tools.models import ToolOutcome
 
@@ -150,15 +151,30 @@ class PendingApproval(BaseModel):
     """What a paused run is waiting for.
 
     Enough for a person to understand the decision they are being asked to make:
-    which tool, why it is gated, when it was asked, and who asked. **Not** what
-    the tool was asked to do - the arguments are business data and are not
-    published for observability.
+    which tool, which record, why it is gated, when it was asked, who asked, and
+    how long they have. **Not** the argument payload - what appears here is the
+    projection the tool's own ``ApprovalSummary`` declared, taken once when the
+    approval was requested, and there is no field on this model that could carry
+    anything else.
     """
 
     id: uuid.UUID
     tool_name: str | None
     action: str
     reason: str | None
+    summary: str | None = Field(
+        default=None,
+        description="What is being proposed, in one line. Built from the tool's "
+        "own declaration of which fields a reviewer may see.",
+    )
+    summary_fields: list[ApprovalField] = Field(
+        default_factory=list,
+        description="The labelled values behind the summary. An allow-list the "
+        "tool declared, never the argument payload.",
+    )
+    expires_at: datetime | None = Field(
+        default=None, description="When this stops being decidable."
+    )
     requested_at: datetime
     requested_by: uuid.UUID
 
@@ -224,6 +240,9 @@ class AgentRunResponse(BaseModel):
                     tool_name=approval.tool_name,
                     action=approval.action,
                     reason=approval.reason,
+                    summary=approval.summary,
+                    summary_fields=[ApprovalField(**field) for field in approval.summary_fields],
+                    expires_at=approval.expires_at,
                     requested_at=approval.requested_at,
                     requested_by=approval.requested_by,
                 )

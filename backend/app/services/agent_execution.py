@@ -48,7 +48,7 @@ from app.agents.runtime import AgentRuntime
 from app.ai.exceptions import LLMError
 from app.ai.models import LLMMessage, LLMRole
 from app.core.config import Settings
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.agent_run import AgentRunRecord, ToolExecutionRecord
 from app.models.approval import Approval
 from app.models.enums import ApprovalStatus, MessageRole
@@ -59,6 +59,7 @@ from app.repositories.conversation import ConversationRepository
 from app.services.audit import (
     record_agent_run,
     record_agent_run_created,
+    record_approval_cancelled,
     record_approval_requested,
 )
 from app.services.run_journal import DatabaseRunJournal
@@ -87,6 +88,19 @@ class RunNotFoundError(NotFoundError):
     message = "That agent run does not exist."
 
 
+class RunNotCancellableError(ConflictError):
+    """The run is not in a state a person can stop.
+
+    Cancellation ends a run that is *waiting*, and nothing else. A run that has
+    finished has nothing to stop, and a run that is mid-flight is being driven
+    by another request - ending it from here would leave that request writing
+    into a record the database says is closed.
+    """
+
+    code = "agent_run_not_cancellable"
+    message = "That run is not waiting for approval, so it cannot be cancelled."
+
+
 @dataclass(frozen=True)
 class RunView:
     """One run as a client is allowed to see it, read from the durable record.
@@ -108,12 +122,18 @@ class AgentExecutionService:
     def __init__(
         self,
         session: AsyncSession,
-        runtime: AgentRuntime,
+        runtime: Callable[[], AgentRuntime],
         settings: Settings,
         membership: OrganizationMember,
         tools: ToolRegistry | None = None,
     ) -> None:
         self._session = session
+        # A factory rather than a runtime, for the same reason the approval
+        # service takes one: building an ``AgentRuntime`` builds the LLM gateway,
+        # which fails on a deployment with no provider credential. Reading a run
+        # back and cancelling a paused one never touch a model, and answering
+        # either with a 500 about a provider would be a lie about what went
+        # wrong. Only the paths that actually call a model call this.
         self._runtime = runtime
         self._settings = settings
         self._tools = tools
@@ -153,7 +173,7 @@ class AgentExecutionService:
         """
         # An agent that does not exist for this tenant must not leave a row
         # behind, so resolution comes before anything is written.
-        agent = self._runtime.resolve(agent_id, self._organization_id)
+        agent = self._runtime().resolve(agent_id, self._organization_id)
 
         await self._sweep_abandoned()
 
@@ -194,6 +214,7 @@ class AgentExecutionService:
             record=record,
             conversation_id=conversation_id,
             registry=self._tools,
+            approval_expires_after=timedelta(seconds=self._settings.approval_expiration_seconds),
         )
 
         run = AgentRun(
@@ -205,7 +226,7 @@ class AgentExecutionService:
         )
 
         await self._drive(
-            lambda: self._runtime.run(
+            lambda: self._runtime().run(
                 agent_id,
                 history,
                 organization_id=self._organization_id,
@@ -272,6 +293,54 @@ class AgentExecutionService:
     async def list_recent(self, *, limit: int = 20) -> list[RunView]:
         """This organization's runs, newest first."""
         return [await self._view(record) for record in await self._runs.list_recent(limit=limit)]
+
+    async def cancel(self, run_id: uuid.UUID) -> RunView:
+        """Stop a run that is waiting on somebody, and withdraw its question.
+
+        Order matters and is the opposite of the intuitive one: the **run** is
+        cancelled first, then its approvals are withdrawn. Both statements are
+        conditional, so if an approval is being decided at this instant one of
+        two things happens and neither is bad:
+
+        * this call wins the run - the decision then finds the run no longer
+          ``awaiting_approval`` and reports that it cannot be resumed, having
+          executed nothing;
+        * the decision wins the run - this call changes no row and is told the
+          run is not cancellable, having withdrawn nothing.
+
+        What cannot happen is the action running after the run is durably
+        cancelled, because the tool is only ever reached through a decision that
+        found the run paused.
+
+        Raises:
+            RunNotFoundError: Not this organization's run.
+            RunNotCancellableError: It is not waiting for anybody.
+        """
+        record = await self._runs.get(run_id)
+        if record is None:
+            raise RunNotFoundError()
+
+        if not await self._runs.cancel_paused(record.id):
+            raise RunNotCancellableError()
+
+        for approval in await self._approvals.list_for_run(record.id):
+            if approval.status is ApprovalStatus.PENDING:
+                await record_approval_cancelled(self._session, approval, cancelled_by=self._user_id)
+
+        await self._approvals.cancel_for_run(record.id)
+        await self._session.commit()
+        await self._session.refresh(record)
+
+        logger.info(
+            "Agent run cancelled",
+            extra={
+                "context": {
+                    "run_id": str(record.id),
+                    "organization_id": str(self._organization_id),
+                }
+            },
+        )
+        return await self._view(record)
 
     async def _view(self, record: AgentRunRecord, *, replayed: bool = False) -> RunView:
         """Project a durable run onto what a client may see."""

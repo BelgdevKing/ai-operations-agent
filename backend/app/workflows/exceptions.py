@@ -105,6 +105,19 @@ class WorkflowStateError(WorkflowError):
     message = "The workflow run is not in a state that allows that."
 
 
+class WorkflowRunNotCancellableError(WorkflowError):
+    """The run is not in a state a person can stop.
+
+    A 409, and the agent runtime's reasoning unchanged: cancellation ends a run
+    that is *waiting*. A finished run has nothing to stop, and a running one is
+    being advanced by another request.
+    """
+
+    status_code = 409
+    code = "workflow_run_not_cancellable"
+    message = "That run is not waiting for approval, so it cannot be cancelled."
+
+
 class WorkflowStepFailedError(WorkflowError):
     """A step did not succeed, and the run stops.
 

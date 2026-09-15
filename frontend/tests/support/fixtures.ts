@@ -7,6 +7,7 @@
 
 import type {
   AgentRunResponse,
+  ApprovalQueue,
   ApprovalResponse,
   ConversationDetail,
   GenerateResponse,
@@ -126,11 +127,25 @@ export function awaitingApproval(): AgentRunResponse {
       action: "cancel_shipment",
       reason:
         "The agent asked to run cancel_shipment, which is classified destructive and cannot be performed without a person agreeing to it.",
+      summary: "Cancel shipment ABC123",
+      summary_fields: [
+        { label: "Shipment reference", value: "ABC123" },
+        { label: "Reason", value: "The customer asked us to stop it." },
+      ],
+      expires_at: "2026-01-02T00:00:00Z",
       requested_at: "2026-01-01T00:00:00Z",
       requested_by: user.id,
     },
     step_count: 1,
   };
+}
+
+/** One page of the inbox, as `GET /approvals` answers it. */
+export function approvalQueue(
+  approvals: ApprovalResponse[] = [approvalResponse()],
+  nextCursor: string | null = null,
+): ApprovalQueue {
+  return { approvals, next_cursor: nextCursor };
 }
 
 /** One pending approval, as the queue reports it. */
@@ -139,15 +154,29 @@ export function approvalResponse(
 ): ApprovalResponse {
   return {
     id: APPROVAL_ID,
+    organization_id: acme.id,
     status: "pending",
     run_id: RUN_ID,
     conversation_id: CONVERSATION_ID,
+    workflow_run_id: null,
+    workflow_step_run_id: null,
     tool_execution_id: "88888888-8888-4888-8888-888888888888",
     tool_name: "cancel_shipment",
     action: "cancel_shipment",
+    summary: "Cancel shipment ABC123",
+    summary_fields: [
+      { label: "Shipment reference", value: "ABC123" },
+      { label: "Reason", value: "The customer asked us to stop it." },
+    ],
     reason: "It is classified destructive.",
+    effect_if_approved:
+      "cancel_shipment runs once, as the exact execution this approval names, and the paused run continues from where it stopped.",
+    effect_if_rejected:
+      "cancel_shipment is never run. The paused run continues and reports the refusal - a refusal is an outcome of the process, not a failure of the platform.",
     requested_by: user.id,
     requested_at: "2026-01-01T00:00:00Z",
+    expires_at: "2026-01-02T00:00:00Z",
+    decision_reason: null,
     decided_by: null,
     decided_at: null,
     ...overrides,

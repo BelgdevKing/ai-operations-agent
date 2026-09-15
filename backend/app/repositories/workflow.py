@@ -42,6 +42,11 @@ from app.models.enums import RunStatus, StepRunStatus, WorkflowStatus, WorkflowS
 from app.models.workflow import Workflow, WorkflowRun, WorkflowStepRun
 from app.repositories.tenant import TenantScopedRepository
 
+CANCELLED_ERROR_CODE = "workflow_run_cancelled"
+CANCELLED_ERROR_MESSAGE = (
+    "Somebody stopped this run while it was waiting for approval. Nothing further was performed."
+)
+
 ABANDONED_ERROR_CODE = "workflow_run_abandoned"
 """Why a run that nothing is driving any more is marked failed."""
 
@@ -271,6 +276,33 @@ class WorkflowRunRepository(TenantScopedRepository[WorkflowRun]):
         result = cast("CursorResult[Any]", await self.session.execute(statement))
         return result.rowcount or 0
 
+    async def cancel_paused(self, run_id: uuid.UUID) -> bool:
+        """Stop a workflow run that is waiting on a person, if it still is.
+
+        The agent runtime's reasoning, unchanged: ``awaiting_approval`` is the
+        only state with nothing in flight, so it is the only one a durable
+        cancellation can end without racing the request that is driving it.
+
+        Returns True when this call cancelled the run.
+        """
+        statement = (
+            update(WorkflowRun)
+            .where(
+                WorkflowRun.id == run_id,
+                WorkflowRun.organization_id == self.organization_id,
+                WorkflowRun.status == RunStatus.AWAITING_APPROVAL,
+            )
+            .values(
+                status=RunStatus.CANCELLED,
+                error_code=CANCELLED_ERROR_CODE,
+                error_message=CANCELLED_ERROR_MESSAGE,
+                completed_at=func.now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast("CursorResult[Any]", await self.session.execute(statement))
+        return (result.rowcount or 0) == 1
+
 
 class WorkflowStepRunRepository(TenantScopedRepository[WorkflowStepRun]):
     """Step executions of one organization's workflow runs."""
@@ -359,6 +391,27 @@ class WorkflowStepRunRepository(TenantScopedRepository[WorkflowStepRun]):
         )
         result = await self.session.execute(statement)
         return int(result.scalar_one())
+
+    async def cancel_paused(self, run_id: uuid.UUID) -> int:
+        """Close the steps of a cancelled run that were waiting on somebody.
+
+        Cosmetic in the sense that nothing reads a step run to decide whether to
+        execute - the run's own status settles that - and not cosmetic at all in
+        the sense that a cancelled run whose step still says "waiting for
+        approval" is a record that contradicts itself.
+        """
+        statement = (
+            update(WorkflowStepRun)
+            .where(
+                WorkflowStepRun.organization_id == self.organization_id,
+                WorkflowStepRun.workflow_run_id == run_id,
+                WorkflowStepRun.status == StepRunStatus.AWAITING_APPROVAL,
+            )
+            .values(status=StepRunStatus.CANCELLED, completed_at=func.now())
+            .execution_options(synchronize_session=False)
+        )
+        result = cast("CursorResult[Any]", await self.session.execute(statement))
+        return result.rowcount or 0
 
     async def claim(self, step_run_id: uuid.UUID) -> bool:
         """Take the right to continue a paused step, once.

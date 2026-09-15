@@ -46,7 +46,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,6 +69,7 @@ from app.tools.models import (
     ToolResult,
 )
 from app.tools.registry import ToolRegistry
+from app.tools.summary import ActionSummary, build_summary
 from app.workflows.context import WorkflowContext, encoded_size, evaluate
 from app.workflows.definition import (
     AgentStep,
@@ -114,6 +115,9 @@ class StepOutcome:
     #: Set when the step is waiting on a person. Carries the execution the
     #: decision would authorise, when there is one.
     approval_reason: str | None = None
+    #: What the person is being asked to allow, already reduced to the fields
+    #: the tool declared safe to show. Never the arguments themselves.
+    approval_summary: ActionSummary | None = None
     tool_execution_id: uuid.UUID | None = None
     tool_name: str | None = None
 
@@ -388,9 +392,19 @@ class WorkflowEngine:
         if result.outcome is ToolOutcome.APPROVAL_REQUIRED:
             metadata = self._metadata(step.tool)
             safety = metadata.safety.value if metadata else "sensitive"
+            # The same allow-list the agent path applies, applied to the
+            # interpolated arguments. A workflow author cannot widen it: what a
+            # reviewer sees is decided by the tool's own code, not by the
+            # document that called it.
+            summary = (
+                build_summary(metadata.approval_summary, arguments)
+                if metadata is not None and metadata.approval_summary is not None
+                else None
+            )
             return StepOutcome(
                 status=StepRunStatus.AWAITING_APPROVAL,
                 approval_reason=TOOL_REASON.format(tool=step.tool, safety=safety),
+                approval_summary=summary,
                 tool_execution_id=result.tool_execution_id,
                 tool_name=step.tool,
                 next_step=step.next,
@@ -500,6 +514,11 @@ class WorkflowEngine:
         return StepOutcome(
             status=StepRunStatus.AWAITING_APPROVAL,
             approval_reason=step.reason,
+            # Literal text from the definition, with no fields behind it: there
+            # is no execution here to summarise, only a question somebody wrote.
+            approval_summary=(
+                ActionSummary(headline=step.summary) if step.summary is not None else None
+            ),
             next_step=step.next,
         )
 
@@ -724,6 +743,8 @@ class WorkflowEngine:
         if outcome.approval_reason is None:
             return
 
+        summary = outcome.approval_summary
+
         self._session.add(
             Approval(
                 organization_id=self._organization_id,
@@ -734,6 +755,10 @@ class WorkflowEngine:
                 tool_name=outcome.tool_name,
                 action=outcome.tool_name or step_run.step_key,
                 reason=outcome.approval_reason,
+                summary=summary.headline if summary else None,
+                summary_fields=summary.as_dicts() if summary else [],
+                expires_at=datetime.now(UTC)
+                + timedelta(seconds=self._settings.approval_expiration_seconds),
                 status=ApprovalStatus.PENDING,
             )
         )

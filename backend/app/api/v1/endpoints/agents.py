@@ -21,7 +21,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header
 
-from app.api.deps import AgentExecutionServiceDep, AgentRegistryDep, RequireMember
+from app.api.deps import (
+    AgentExecutionServiceDep,
+    AgentRegistryDep,
+    RequireAdmin,
+    RequireMember,
+)
 from app.core.context import get_request_id
 from app.schemas.agent import (
     IDEMPOTENCY_KEY_PATTERN,
@@ -162,6 +167,55 @@ async def get_run(
     """
     del membership
     return AgentRunResponse.from_view(await execution.get(run_id))
+
+
+@router.post(
+    "/runs/{run_id}/cancel",
+    response_model=AgentRunResponse,
+    summary="Stop a run that is waiting for approval",
+    responses={
+        401: RESPONSES[401],
+        403: RESPONSES[403],
+        404: RESPONSES[404],
+        409: {
+            "model": ErrorResponse,
+            "description": "The run is not waiting for approval",
+        },
+    },
+)
+async def cancel_run(
+    run_id: uuid.UUID,
+    membership: RequireAdmin,
+    execution: AgentExecutionServiceDep,
+) -> AgentRunResponse:
+    """Stop a run that is waiting on a person.
+
+    Only a run in ``awaiting_approval`` can be cancelled, and that restriction is
+    the safety property rather than a limitation. A run that is *running* is
+    being driven by another request at this moment; ending it durably from here
+    would leave that request writing steps into a record the database says is
+    closed. A paused run has nothing in flight - which is exactly why it is the
+    one that can be ended cleanly.
+
+    **Cancellation wins safely against approval.** Both take the run with a
+    conditional update, so if somebody is deciding at this instant, either this
+    call wins and the decision is told the run can no longer continue - having
+    executed nothing - or the decision wins and this call is told the run is not
+    cancellable. The gated action cannot run after the run is durably cancelled,
+    because the only path to the tool goes through a decision that found the run
+    paused.
+
+    The pending approval is withdrawn as ``cancelled``: not rejected, because
+    nobody refused the action, and not left pending, because nothing will ever
+    decide it.
+
+    Administrator or owner, the same as deciding. Ending a durable process that
+    somebody else may be waiting on is administration, and the role is the
+    boundary - the request is checked against the database, not against whether
+    an interface offered a button.
+    """
+    del membership
+    return AgentRunResponse.from_view(await execution.cancel(run_id))
 
 
 @router.get(

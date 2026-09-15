@@ -238,7 +238,7 @@ class AgentRunner:
                     if result.outcome is ToolOutcome.APPROVAL_REQUIRED:
                         # Somebody has to decide. Not an answer, not a failure,
                         # and emphatically not a completed run.
-                        await journal.record_approval_request(run, attempt)
+                        await journal.record_approval_request(run, attempt, decision.arguments)
                         run.await_approval(tool_execution_id=result.tool_execution_id)
                         await journal.record_state(run)
                         self._log_outcome(run, outcome="awaiting_approval")

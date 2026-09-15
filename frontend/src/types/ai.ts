@@ -102,11 +102,31 @@ export interface ToolCallSummary {
  * why it is gated. Deliberately not what the tool was asked to do: the
  * arguments are business data and the backend does not publish them.
  */
+/**
+ * One labelled value from a tool's declared approval summary.
+ *
+ * Not a piece of the argument payload. A tool declares, in its own code, which
+ * of its fields a reviewer may see; the projection was taken once when the
+ * approval was requested, and the rest of the payload was never part of it.
+ * Both halves are plain text of bounded length by the time they arrive here.
+ */
+export interface ApprovalField {
+  label: string;
+  value: string;
+}
+
 export interface PendingApproval {
   id: string;
   tool_name: string | null;
   action: string;
+  /** Why a person has to agree. The framework's reason, not the model's. */
   reason: string | null;
+  /** What is being proposed, in one line: "Cancel shipment ABC123". */
+  summary: string | null;
+  /** The labelled values behind it. An allow-list, never the arguments. */
+  summary_fields: ApprovalField[];
+  /** When it stops being decidable. Null where nothing expires. */
+  expires_at: string | null;
   requested_at: string;
   requested_by: string;
 }
@@ -175,20 +195,59 @@ export interface ConversationDetail {
 /** `app/models/enums.py::ApprovalStatus` */
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired" | "cancelled";
 
-/** `GET /api/v1/approvals` */
+/** `GET /api/v1/approvals/{id}` - one approval, as a reviewer may see it. */
 export interface ApprovalResponse {
   id: string;
+  organization_id: string;
   status: ApprovalStatus;
   run_id: string | null;
   conversation_id: string | null;
+  workflow_run_id: string | null;
+  workflow_step_run_id: string | null;
   tool_execution_id: string | null;
   tool_name: string | null;
   action: string;
+  /** What is being proposed, in one line. Null where the tool declared none. */
+  summary: string | null;
+  summary_fields: ApprovalField[];
+  /** Why a person has to agree. Never the arguments, never model prose. */
   reason: string | null;
+  /** What a yes does, in plain words. */
+  effect_if_approved: string;
+  /** What a no does. */
+  effect_if_rejected: string;
   requested_by: string;
   requested_at: string;
+  /** When it stops being decidable, after which the action never runs. */
+  expires_at: string | null;
   decided_by: string | null;
   decided_at: string | null;
+  /** What the deciding person wrote, if anything. Rendered as text. */
+  decision_reason: string | null;
+}
+
+/**
+ * `GET /api/v1/approvals` - one page of the inbox.
+ *
+ * Paged from the last row seen rather than by offset: approvals arrive at the
+ * front of the order the queue is read in, so an offset would skip items that
+ * were never shown to anybody. A full page always carries a cursor, because
+ * whether anything follows it cannot be known without asking.
+ */
+export interface ApprovalQueue {
+  approvals: ApprovalResponse[];
+  next_cursor: string | null;
+}
+
+/**
+ * The body of a decision.
+ *
+ * One optional field, and the backend forbids any other - so there is no
+ * request a client can send that changes *what* is being approved. Everything
+ * about the action is read from the persisted approval.
+ */
+export interface ApprovalDecisionRequest {
+  reason?: string;
 }
 
 // -- Workflows ----------------------------------------------------------------
@@ -265,6 +324,9 @@ export interface WorkflowPendingApproval {
   tool_name: string | null;
   action: string;
   reason: string | null;
+  summary: string | null;
+  summary_fields: ApprovalField[];
+  expires_at: string | null;
   requested_at: string;
   requested_by: string;
 }

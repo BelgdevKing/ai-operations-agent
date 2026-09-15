@@ -184,20 +184,44 @@ async def test_an_agent_approval_leaves_the_parameters_column_empty(
     assert "ABC123" not in str(approval.parameters)
 
 
-async def test_the_queue_never_publishes_the_arguments(
+async def test_the_queue_publishes_the_declared_summary_and_no_payload(
     app: FastAPI, api_client: AsyncClient, session: AsyncSession
 ) -> None:
+    """What changed in the human-in-the-loop phase, and what did not.
+
+    This test used to assert that the reference never appeared in the queue at
+    all, which was true and was also why the queue was close to useless: an
+    approver saw "cancel_shipment" and had to guess which consignment. It now
+    appears, and the reason it is safe to let it is a different mechanism rather
+    than a relaxed rule - ``CancelShipmentTool`` declares, in its own code,
+    which of its fields a reviewer may be shown, and the projection was taken
+    once when the approval was requested.
+
+    So the assertions here are about that declaration: the summary says what is
+    being done and to what, the fields are exactly the declared ones, and the
+    argument payload has no representation in the response at all.
+    """
     account = await register(api_client)
     await pause_a_run(app, api_client, session, account)
 
     listed = await api_client.get("/api/v1/approvals", headers=account.headers())
 
     assert listed.status_code == 200
-    payload = listed.text
-    assert CANCEL in payload, "an approver is told what kind of action it is"
-    assert "ABC123" not in payload, "but not what it was asked to do it to"
-    assert REASON not in payload
-    assert "parameters" not in payload
+    queued = listed.json()["approvals"]
+    assert len(queued) == 1
+
+    approval = queued[0]
+    assert approval["tool_name"] == CANCEL, "an approver is told what kind of action it is"
+    assert approval["summary"] == "Cancel shipment ABC123", "and which record it lands on"
+    assert [field["label"] for field in approval["summary_fields"]] == [
+        "Shipment reference",
+        "Reason",
+    ]
+
+    # The payload itself has nowhere to be: no field carries it, and the column
+    # that could have is still empty.
+    assert "parameters" not in approval
+    assert "arguments" not in approval
 
 
 # -- Who may decide -----------------------------------------------------------
@@ -214,7 +238,7 @@ async def test_a_member_may_read_the_queue(
     listed = await api_client.get("/api/v1/approvals", headers=member.headers())
 
     assert listed.status_code == 200
-    assert len(listed.json()) == 1
+    assert len(listed.json()["approvals"]) == 1
 
 
 async def test_a_member_cannot_approve(
@@ -513,7 +537,7 @@ async def test_another_organization_cannot_see_the_approval(
         f"/api/v1/approvals/{paused['approval']['id']}", headers=theirs.headers()
     )
 
-    assert listed.json() == []
+    assert listed.json()["approvals"] == []
     assert fetched.status_code == 404
     assert fetched.json()["error"]["code"] == "approval_not_found"
 

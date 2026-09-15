@@ -370,20 +370,31 @@ AgentRuntimeDep = Annotated[AgentRuntime, Depends(get_agent_runtime)]
 
 
 def get_agent_execution_service(
+    request: Request,
     session: SessionDep,
     membership: CurrentMembership,
     settings: SettingsDep,
-    runtime: AgentRuntimeDep,
+    executor: ToolExecutorDep,
     registry: ToolRegistryDep,
 ) -> AgentExecutionService:
     """Durable agent execution, fixed to the caller's organization.
 
-    ``membership`` is declared before ``runtime`` on purpose, and the same
-    ordering appears on every endpoint that uses this. FastAPI resolves
-    dependencies in order and the LLM gateway is built on first use, so
-    authorizing first is what keeps a provider misconfiguration from answering an
-    anonymous caller with a 500 where a 401 belongs.
+    The runtime is built on demand rather than injected. Most of what this
+    service does - reading a run back, listing recent runs, cancelling a paused
+    one - never calls a model, and an eagerly built runtime made every one of
+    those endpoints fail with a provider error on a deployment that has no
+    provider credential configured. The same reasoning, and the same fix, as the
+    approval and workflow services.
     """
+
+    def runtime() -> AgentRuntime:
+        return AgentRuntime(
+            resolve_llm_gateway(request, settings),
+            get_agent_registry(request, settings),
+            settings,
+            executor,
+        )
+
     return AgentExecutionService(session, runtime, settings, membership, registry)
 
 
@@ -443,17 +454,18 @@ class LazyAgentStepRunner:
         self._registry = registry
         self._service: AgentExecutionService | None = None
 
+    def _runtime(self) -> AgentRuntime:
+        return AgentRuntime(
+            resolve_llm_gateway(self._request, self._settings),
+            get_agent_registry(self._request, self._settings),
+            self._settings,
+            self._executor,
+        )
+
     def _resolve(self) -> AgentExecutionService:
         if self._service is None:
-            gateway = resolve_llm_gateway(self._request, self._settings)
-            runtime = AgentRuntime(
-                gateway,
-                get_agent_registry(self._request, self._settings),
-                self._settings,
-                self._executor,
-            )
             self._service = AgentExecutionService(
-                self._session, runtime, self._settings, self._membership, self._registry
+                self._session, self._runtime, self._settings, self._membership, self._registry
             )
         return self._service
 

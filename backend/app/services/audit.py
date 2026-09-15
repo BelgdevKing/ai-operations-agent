@@ -50,6 +50,8 @@ WORKFLOW_RUN_RESOURCE = "workflow_run"
 APPROVAL_REQUESTED_EVENT = "approval.requested"
 APPROVAL_APPROVED_EVENT = "approval.approved"
 APPROVAL_REJECTED_EVENT = "approval.rejected"
+APPROVAL_EXPIRED_EVENT = "approval.expired"
+APPROVAL_CANCELLED_EVENT = "approval.cancelled"
 APPROVAL_RESOURCE = "approval"
 
 
@@ -195,10 +197,13 @@ async def record_approval_decision(
 ) -> AuditEvent:
     """Add a record of who decided, and which way.
 
-    The decision's *reason* is not recorded, because nobody is asked for one -
-    and if they were, it would be free text a person wrote about a specific
-    business action, which belongs with the approval rather than in a trail
-    designed to be readable by anyone who can see the organization's history.
+    The decision's *reason* is now collected, and it is still not recorded here.
+    What goes in is whether one was given and how long it was - free text a
+    person wrote about a specific business action belongs with the approval,
+    which is tenant-scoped and read by people looking at that action, rather
+    than in a trail designed to be readable by anyone who can see the whole
+    organization's history. "There was a reason, of 48 characters" is what an
+    auditor needs from here; the reason itself is one row away.
     """
     approved = approval.status.value == "approved"
     event_type = APPROVAL_APPROVED_EVENT if approved else APPROVAL_REJECTED_EVENT
@@ -208,6 +213,80 @@ async def record_approval_decision(
         organization_id=approval.organization_id,
         user_id=decided_by,
         event_type=event_type,
+        resource_type=APPROVAL_RESOURCE,
+        resource_id=approval.id,
+        action=approval.status.value,
+        metadata={
+            "run_id": str(approval.run_id) if approval.run_id else None,
+            "workflow_run_id": (
+                str(approval.workflow_run_id) if approval.workflow_run_id else None
+            ),
+            "tool_execution_id": (
+                str(approval.tool_execution_id) if approval.tool_execution_id else None
+            ),
+            "tool_name": approval.tool_name,
+            "requested_by": str(approval.requested_by),
+            "reason_given": approval.decision_reason is not None,
+            "reason_length": len(approval.decision_reason or ""),
+        },
+    )
+
+
+async def record_approval_expired(
+    session: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    run_id: uuid.UUID | None,
+    workflow_run_id: uuid.UUID | None,
+    tool_execution_id: uuid.UUID | None,
+    tool_name: str | None,
+    requested_by: uuid.UUID,
+) -> AuditEvent:
+    """Add a record that nobody answered in time.
+
+    Takes identifiers rather than an :class:`Approval`, because the caller has
+    just expired the row with a bulk ``UPDATE ... RETURNING`` and the object in
+    its session is behind the database. The returned row is the authoritative
+    account of what changed, so it is what gets written down.
+
+    ``user_id`` is the requester, not a decider: nobody decided this. That the
+    event type says ``approval.expired`` is what keeps the two apart for anyone
+    reading the trail later.
+    """
+    return await _add(
+        session,
+        organization_id=organization_id,
+        user_id=requested_by,
+        event_type=APPROVAL_EXPIRED_EVENT,
+        resource_type=APPROVAL_RESOURCE,
+        resource_id=approval_id,
+        action="expired",
+        metadata={
+            "run_id": str(run_id) if run_id else None,
+            "workflow_run_id": str(workflow_run_id) if workflow_run_id else None,
+            "tool_execution_id": str(tool_execution_id) if tool_execution_id else None,
+            "tool_name": tool_name,
+            "requested_by": str(requested_by),
+            "error_code": "approval_expired",
+        },
+    )
+
+
+async def record_approval_cancelled(
+    session: AsyncSession, approval: Approval, *, cancelled_by: uuid.UUID
+) -> AuditEvent:
+    """Add a record that the run was stopped before anybody decided.
+
+    A third way out of ``pending``, and a different one again: expiry is the
+    clock, rejection is a person saying no to the action, and this is a person
+    stopping the whole process the action belonged to.
+    """
+    return await _add(
+        session,
+        organization_id=approval.organization_id,
+        user_id=cancelled_by,
+        event_type=APPROVAL_CANCELLED_EVENT,
         resource_type=APPROVAL_RESOURCE,
         resource_id=approval.id,
         action=approval.status.value,

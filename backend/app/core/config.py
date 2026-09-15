@@ -50,6 +50,15 @@ MAX_WORKFLOW_STEPS = 64
 MAX_WORKFLOW_DEFINITION_BYTES = 262_144
 MAX_WORKFLOW_PAYLOAD_BYTES = 262_144
 
+# How long a pending approval may wait for a person before it lapses. Bounded at
+# both ends and for different reasons: below the floor an approval could expire
+# before anybody was plausibly told about it, and above the ceiling a paused run
+# holds its conversation, its claimed execution and its place in the queue for
+# longer than anyone will remember why it is there. A month is already generous
+# for "somebody will get to this".
+MIN_APPROVAL_EXPIRATION_SECONDS = 60
+MAX_APPROVAL_EXPIRATION_SECONDS = 2_592_000
+
 # Which vendor serves model calls. Only the selected one needs a credential.
 LLMProviderName = Literal["anthropic", "openai"]
 
@@ -266,6 +275,19 @@ class Settings(BaseSettings):
         "same reasoning as the agent runtime's: there is no background worker, "
         "and a run whose request died has nothing to continue it. Runs awaiting "
         "approval are never swept.",
+    )
+
+    # -- Human approval --------------------------------------------------------
+    approval_expiration_seconds: int = Field(
+        default=86_400,
+        ge=MIN_APPROVAL_EXPIRATION_SECONDS,
+        le=MAX_APPROVAL_EXPIRATION_SECONDS,
+        description="How long a pending approval waits for a person before it "
+        "lapses. The expiry is stamped on the row when the approval is "
+        "requested, so changing this never moves a deadline somebody has "
+        "already been given. An expired approval can no longer be decided and "
+        "the action it gated never runs; the run it paused is failed with "
+        "approval_expired rather than left waiting forever.",
     )
 
     # -- Tool framework --------------------------------------------------------

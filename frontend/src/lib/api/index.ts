@@ -7,9 +7,11 @@ export {
   AI_TIMEOUT_MS,
   IDEMPOTENCY_HEADER,
   approveAction,
+  cancelRun,
   changeMemberRole,
   generate,
   getConversation,
+  getApproval,
   getCurrentUser,
   getHealth,
   getOrganization,
@@ -30,6 +32,8 @@ export {
   startWorkflowRun,
 } from "./endpoints";
 export type {
+  ApprovalQueryOptions,
+  DecisionOptions,
   ListMembersOptions,
   RunAgentOptions,
   StartWorkflowOptions,

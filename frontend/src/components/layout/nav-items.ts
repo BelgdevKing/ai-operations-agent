@@ -17,6 +17,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
     description: "Ask the configured model a question.",
   },
   {
+    href: "/approvals",
+    label: "Approvals",
+    description: "Actions waiting on a person.",
+  },
+  {
     href: "/workflows",
     label: "Workflows",
     description: "Business processes the platform runs, and what they are waiting on.",

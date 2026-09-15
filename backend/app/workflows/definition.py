@@ -48,6 +48,8 @@ StepId = Annotated[str, Field(pattern=STEP_ID_PATTERN)]
 MAX_NAME_LENGTH = 200
 MAX_DESCRIPTION_LENGTH = 1_000
 MAX_REASON_LENGTH = 500
+# Matches ``approvals.summary``, which is what it is stored in.
+MAX_SUMMARY_LENGTH = 200
 MAX_PROMPT_LENGTH = 4_000
 MAX_ARGUMENTS = 20
 
@@ -290,6 +292,15 @@ class ApprovalStep(_BaseStep):
         "from business data is a way to put whatever a record contains in front "
         "of somebody as if the platform were saying it.",
     )
+    summary: str | None = Field(
+        default=None,
+        max_length=MAX_SUMMARY_LENGTH,
+        description="What is being approved, in one line - the headline a "
+        "reviewer reads in the queue before opening anything. Literal text for "
+        "the same reason the reason is: a headline assembled from business data "
+        "would put whatever a record happens to contain in front of somebody "
+        "with the platform's voice behind it.",
+    )
     next: StepId | None = Field(default=None, description="Where approval leads.")
     on_reject: StepId | None = Field(
         default=None,
@@ -303,6 +314,13 @@ class ApprovalStep(_BaseStep):
     def _reason_is_literal(cls, value: str) -> str:
         if looks_like_reference(value):
             raise ValueError("An approval reason must be literal text, not a reference.")
+        return value
+
+    @field_validator("summary")
+    @classmethod
+    def _summary_is_literal(cls, value: str | None) -> str | None:
+        if value is not None and looks_like_reference(value):
+            raise ValueError("An approval summary must be literal text, not a reference.")
         return value
 
     @property

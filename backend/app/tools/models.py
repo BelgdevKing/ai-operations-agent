@@ -17,6 +17,8 @@ from typing import Annotated, Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.tools.summary import ApprovalSummary
+
 # A tool name selects code, so it is an identifier rather than free text. Same
 # shape the agent decision uses, checked again here because a registry can be
 # populated from somewhere other than a model decision.
@@ -117,6 +119,15 @@ class ToolMetadata(BaseModel):
         "been recorded - it never grants its own.",
     )
 
+    approval_summary: ApprovalSummary | None = Field(
+        default=None,
+        description="Which arguments an approver may be shown, and under what "
+        "fixed phrase. Absent means the approval names the tool and nothing "
+        "else, which is safe but tells a reviewer very little - so anything "
+        "gated should declare one. The declaration is an allow-list: the "
+        "arguments it does not name are never written to the approval record.",
+    )
+
     timeout_seconds: float | None = Field(
         default=None,
         gt=0,
@@ -133,6 +144,18 @@ class ToolMetadata(BaseModel):
         """
         if self.safety is ToolSafety.DESTRUCTIVE and not self.requires_approval:
             raise ValueError("A destructive tool must require approval.")
+        return self
+
+    @model_validator(mode="after")
+    def _summaries_belong_to_gated_tools(self) -> Self:
+        """A summary describes what somebody is being asked to allow.
+
+        A tool nobody is asked about has nothing to summarise, and a declaration
+        on one is dead weight that would mislead the next reader into thinking
+        the tool is gated.
+        """
+        if self.approval_summary is not None and not self.requires_approval:
+            raise ValueError("Only a tool that requires approval may declare an approval summary.")
         return self
 
     @property

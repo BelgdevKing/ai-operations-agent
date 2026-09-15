@@ -27,7 +27,9 @@ import type {
   AgentRunResponse,
   AgentSummary,
   ApprovalDecisionResponse,
+  ApprovalQueue,
   ApprovalResponse,
+  ApprovalStatus,
   ConversationDetail,
   ConversationSummary,
   GenerateRequest,
@@ -272,12 +274,68 @@ export function getConversation(
 
 // -- Approvals ----------------------------------------------------------------
 
-/** Actions waiting on a person. Readable by any active member. */
+/** Which approvals a page of the inbox asks for. */
+export interface ApprovalQueryOptions extends CallOptions {
+  /** States to include. Omitted means what is still waiting. */
+  status?: ApprovalStatus[];
+  /** One tool, matched exactly. A tool name is an identifier, not a pattern. */
+  toolName?: string;
+  limit?: number;
+  /** The `next_cursor` of the previous page. */
+  cursor?: string;
+}
+
+/**
+ * One page of the approval inbox. Readable by any active member.
+ *
+ * Reading it is also what lapses anything overdue, server-side: there is no
+ * background worker in this platform, and the moment somebody opens the queue
+ * is the moment it matters that nothing in it is already past its deadline.
+ */
 export function listApprovals(
   caller: ApiCaller,
+  options: ApprovalQueryOptions = {},
+): Promise<ApprovalQueue> {
+  const { status, toolName, limit, cursor, ...call } = options;
+
+  const query = new URLSearchParams();
+  for (const state of status ?? []) query.append("status", state);
+  if (toolName !== undefined) query.set("tool_name", toolName);
+  if (limit !== undefined) query.set("limit", String(limit));
+  if (cursor !== undefined) query.set("cursor", cursor);
+
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return caller.get<ApprovalQueue>(`${V1}/approvals${suffix}`, call);
+}
+
+/** One approval, in as much detail as a reviewer is allowed. */
+export function getApproval(
+  caller: ApiCaller,
+  approvalId: string,
   options?: CallOptions,
-): Promise<ApprovalResponse[]> {
-  return caller.get<ApprovalResponse[]>(`${V1}/approvals`, options);
+): Promise<ApprovalResponse> {
+  return caller.get<ApprovalResponse>(
+    `${V1}/approvals/${encodeURIComponent(approvalId)}`,
+    options,
+  );
+}
+
+/** What may accompany a decision: a reason, and nothing else. */
+export interface DecisionOptions extends CallOptions {
+  /**
+   * Why the decision went this way, in the deciding person's own words.
+   *
+   * The only thing about the request that is not already in the database. The
+   * backend refuses any other field, so there is no call shape here that could
+   * change *what* is being decided.
+   */
+  reason?: string;
+}
+
+/** Omit the body entirely when there is nothing to say. */
+function decisionBody(reason: string | undefined): { reason: string } | undefined {
+  const written = reason?.trim() ?? "";
+  return written === "" ? undefined : { reason: written };
 }
 
 /**
@@ -293,12 +351,13 @@ export function listApprovals(
 export function approveAction(
   caller: ApiCaller,
   approvalId: string,
-  options?: CallOptions,
+  options: DecisionOptions = {},
 ): Promise<ApprovalDecisionResponse> {
+  const { reason, ...call } = options;
   return caller.post<ApprovalDecisionResponse>(
     `${V1}/approvals/${encodeURIComponent(approvalId)}/approve`,
-    undefined,
-    { timeoutMs: AI_TIMEOUT_MS, ...options },
+    decisionBody(reason),
+    { timeoutMs: AI_TIMEOUT_MS, ...call },
   );
 }
 
@@ -312,12 +371,32 @@ export function approveAction(
 export function rejectAction(
   caller: ApiCaller,
   approvalId: string,
-  options?: CallOptions,
+  options: DecisionOptions = {},
 ): Promise<ApprovalDecisionResponse> {
+  const { reason, ...call } = options;
   return caller.post<ApprovalDecisionResponse>(
     `${V1}/approvals/${encodeURIComponent(approvalId)}/reject`,
+    decisionBody(reason),
+    { timeoutMs: AI_TIMEOUT_MS, ...call },
+  );
+}
+
+/**
+ * Stop an agent run that is waiting for approval.
+ *
+ * Requires the admin or owner role. Only a *paused* run can be stopped: a run
+ * that is still going is being advanced by another request, and a finished one
+ * has nothing to stop - both answer 409.
+ */
+export function cancelRun(
+  caller: ApiCaller,
+  runId: string,
+  options?: CallOptions,
+): Promise<AgentRunResponse> {
+  return caller.post<AgentRunResponse>(
+    `${V1}/ai/runs/${encodeURIComponent(runId)}/cancel`,
     undefined,
-    { timeoutMs: AI_TIMEOUT_MS, ...options },
+    options,
   );
 }
 

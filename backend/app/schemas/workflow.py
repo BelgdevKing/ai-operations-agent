@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import RunStatus, StepRunStatus, WorkflowStatus, WorkflowStepType
 from app.models.workflow import Workflow, WorkflowStepRun
+from app.schemas.common import ApprovalField
 from app.services.workflow_execution import WorkflowRunView
 
 MAX_NAME_LENGTH = 200
@@ -155,8 +156,10 @@ class WorkflowPendingApproval(BaseModel):
     """What a paused workflow is waiting for.
 
     Enough for a person to understand the decision: which step, which kind of
-    action, and why it is gated. **Not** what the tool was asked to do - the
-    arguments are business data and the backend does not publish them.
+    action, which record, and why it is gated. **Not** the argument payload -
+    what appears here is the projection the tool's own ``ApprovalSummary``
+    declared, or the literal headline an approval step's definition declared.
+    A workflow author cannot widen either.
     """
 
     id: uuid.UUID
@@ -164,6 +167,19 @@ class WorkflowPendingApproval(BaseModel):
     tool_name: str | None
     action: str
     reason: str | None
+    summary: str | None = Field(
+        default=None,
+        description="What is being proposed, in one line. Built from the tool's "
+        "own declaration of which fields a reviewer may see.",
+    )
+    summary_fields: list[ApprovalField] = Field(
+        default_factory=list,
+        description="The labelled values behind the summary. An allow-list the "
+        "tool declared, never the argument payload.",
+    )
+    expires_at: datetime | None = Field(
+        default=None, description="When this stops being decidable."
+    )
     requested_at: datetime
     requested_by: uuid.UUID
 
@@ -226,6 +242,9 @@ class WorkflowRunResponse(BaseModel):
                     tool_name=approval.tool_name,
                     action=approval.action,
                     reason=approval.reason,
+                    summary=approval.summary,
+                    summary_fields=[ApprovalField(**field) for field in approval.summary_fields],
+                    expires_at=approval.expires_at,
                     requested_at=approval.requested_at,
                     requested_by=approval.requested_by,
                 )

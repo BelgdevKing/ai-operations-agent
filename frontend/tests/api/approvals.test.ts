@@ -15,6 +15,7 @@ import test from "node:test";
 import {
   acme,
   agentRunResponse,
+  approvalQueue,
   approvalResponse,
   awaitingApproval,
   CONVERSATION_ID,
@@ -56,7 +57,7 @@ function withoutComments(source: string): string {
 // -- The queue ----------------------------------------------------------------
 
 test("the queue is read from the approvals resource", async () => {
-  const fetch = stubFetch(() => jsonResponse([approvalResponse()]));
+  const fetch = stubFetch(() => jsonResponse(approvalQueue()));
   try {
     await listApprovals(caller);
 
@@ -68,7 +69,7 @@ test("the queue is read from the approvals resource", async () => {
 });
 
 test("the queue is authenticated and names the acting organization", async () => {
-  const fetch = stubFetch(() => jsonResponse([]));
+  const fetch = stubFetch(() => jsonResponse(approvalQueue([])));
   try {
     await listApprovals(caller);
 
@@ -79,14 +80,18 @@ test("the queue is authenticated and names the acting organization", async () =>
   }
 });
 
-test("a queued approval says which action and why, and not what it was asked", async () => {
-  const fetch = stubFetch(() => jsonResponse([approvalResponse()]));
+test("a queued approval says which action, on what, and why", async () => {
+  const fetch = stubFetch(() => jsonResponse(approvalQueue()));
   try {
-    const [approval] = await listApprovals(caller);
+    const { approvals } = await listApprovals(caller);
+    const [approval] = approvals;
 
     assert.equal(approval?.tool_name, "cancel_shipment");
+    assert.equal(approval?.summary, "Cancel shipment ABC123");
     assert.match(approval?.reason ?? "", /destructive/);
-    // Structural: there is no field for the arguments, in the type or the body.
+    // Structural: there is no field for the argument payload, in the type or
+    // the body. The summary above is a projection the tool declared, taken
+    // when the approval was requested - not the payload with parts removed.
     assert.equal("parameters" in (approval ?? {}), false);
     assert.equal("arguments" in (approval ?? {}), false);
   } finally {

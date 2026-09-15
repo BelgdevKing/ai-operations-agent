@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Sequence
-from datetime import UTC, datetime
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +41,7 @@ from app.repositories.agent_run import ToolExecutionRepository
 from app.repositories.conversation import ConversationRepository
 from app.tools.models import ToolMetadata
 from app.tools.registry import ToolRegistry
+from app.tools.summary import ActionSummary, build_summary
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +71,18 @@ class DatabaseRunJournal:
         record: AgentRunRecord,
         conversation_id: uuid.UUID,
         registry: ToolRegistry | None = None,
+        approval_expires_after: timedelta | None = None,
     ) -> None:
         self._session = session
         self._organization_id = organization_id
         self._record = record
         self._conversation_id = conversation_id
         self._registry = registry
+        # A duration rather than a Settings object: this is the only
+        # configuration the journal has ever needed, and taking the whole of
+        # settings to read one number would make every future settings change a
+        # question about the write path for runs.
+        self._approval_expires_after = approval_expires_after
 
         self._executions = ToolExecutionRepository(session, organization_id)
         self._conversations = ConversationRepository(session, organization_id)
@@ -193,7 +201,9 @@ class DatabaseRunJournal:
 
     # -- Approvals -------------------------------------------------------------
 
-    async def record_approval_request(self, run: AgentRun, attempt: ToolAttempt) -> None:
+    async def record_approval_request(
+        self, run: AgentRun, attempt: ToolAttempt, arguments: Mapping[str, Any]
+    ) -> None:
         """Put the execution in front of a person.
 
         ``parameters`` is left at its empty default. The arguments the agent
@@ -202,12 +212,28 @@ class DatabaseRunJournal:
         record for no benefit, since an approval authorises an *execution* by its
         id rather than a set of values.
 
+        What *is* written from them is the summary, and only through the tool's
+        own declaration: ``ApprovalSummary`` names which of its fields a reviewer
+        may see, and this is where that allow-list is applied. A tool that
+        declares nothing leaves both summary columns empty and the approval says
+        no more than it did before - safe, and not very useful, which is why a
+        gated tool should declare one.
+
+        The reason is the *framework's*, built from the tool's safety
+        classification. It is deliberately not anything the model said: a model
+        does not decide what needs approving, and a sentence it wrote about its
+        own authority is not an authorization record.
+
         ``agent_id`` is left null for the same reason ``conversations.agent_id``
         is: the agent came from the server-side registry, not the ``agents``
         table. The run this approval points at records which agent it was.
         """
         metadata = self._metadata(attempt.tool_name)
         safety = metadata.safety.value if metadata else "sensitive"
+
+        summary: ActionSummary | None = None
+        if metadata is not None and metadata.approval_summary is not None:
+            summary = build_summary(metadata.approval_summary, arguments)
 
         self._session.add(
             Approval(
@@ -219,6 +245,9 @@ class DatabaseRunJournal:
                 tool_name=attempt.tool_name,
                 action=attempt.tool_name,
                 reason=_REASON.format(tool=attempt.tool_name, safety=safety),
+                summary=summary.headline if summary else None,
+                summary_fields=summary.as_dicts() if summary else [],
+                expires_at=self._expires_at(),
                 status=ApprovalStatus.PENDING,
             )
         )
@@ -238,6 +267,18 @@ class DatabaseRunJournal:
         )
 
     # -- Helpers ---------------------------------------------------------------
+
+    def _expires_at(self) -> datetime | None:
+        """When this approval stops being decidable.
+
+        Stamped now, from the deadline configured now, so that changing the
+        setting later never moves a deadline somebody has already been given.
+        ``None`` where no expiry is configured, which the decision path reads as
+        "waits indefinitely" - the behaviour before expiry existed.
+        """
+        if self._approval_expires_after is None:
+            return None
+        return datetime.now(UTC) + self._approval_expires_after
 
     def _metadata(self, tool_name: str) -> ToolMetadata | None:
         """What the registry says about a tool, or nothing if it has none.

@@ -75,6 +75,10 @@ async def test_jsonb_columns_are_really_jsonb(session: AsyncSession) -> None:
 
     assert {(t, c) for t, c in rows} == {
         ("approvals", "parameters"),
+        # The labelled values an approver is shown. Not the arguments: each is
+        # a {"label", "value"} pair the tool's own code declared safe to
+        # disclose, projected once when the approval was requested.
+        ("approvals", "summary_fields"),
         ("audit_events", "metadata"),
         # The structured form of a rendered conversation turn. In the content
         # store on purpose - the operational execution tables hold no tool

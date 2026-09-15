@@ -152,8 +152,8 @@ async function pausedRunOf(
   // been answered, so there is nothing to look up.
   if (last === undefined || last.role !== "tool_request") return null;
 
-  const pending = await listApprovals(api, { signal });
-  const mine = pending.find((approval) => approval.conversation_id === conversation.id);
+  const { approvals } = await listApprovals(api, { signal });
+  const mine = approvals.find((approval) => approval.conversation_id === conversation.id);
   if (mine?.run_id == null) return null;
 
   return getRun(api, mine.run_id, { signal });
@@ -268,7 +268,7 @@ function Conversation({
   }, [conversation, start]);
 
   const decide = useCallback(
-    (approve: boolean): void => {
+    (approve: boolean, reason: string): void => {
       const approval = conversation.approval;
       if (approval === null || conversation.status !== "awaiting_approval") return;
 
@@ -277,8 +277,8 @@ function Conversation({
       // agent run - a workflow's approvals are decided on the workflows page.
       void dispatchRun(async (signal) => {
         const decision = approve
-          ? await approveAction(api, approval.id, { signal })
-          : await rejectAction(api, approval.id, { signal });
+          ? await approveAction(api, approval.id, { signal, reason })
+          : await rejectAction(api, approval.id, { signal, reason });
 
         if (decision.agent_run === null) {
           throw new Error("That approval belongs to a workflow, not this conversation.");
@@ -321,8 +321,8 @@ function Conversation({
           canDecide={canDecide}
           deciding={generating}
           error={conversation.error}
-          onApprove={() => decide(true)}
-          onReject={() => decide(false)}
+          onApprove={(reason) => decide(true, reason)}
+          onReject={(reason) => decide(false, reason)}
         />
       )}
 

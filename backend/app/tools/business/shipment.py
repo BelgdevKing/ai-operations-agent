@@ -27,6 +27,7 @@ from app.tools.business.schemas import (
 )
 from app.tools.exceptions import ToolError
 from app.tools.models import ToolExecutionContext, ToolMetadata, ToolSafety
+from app.tools.summary import ApprovalSummary
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,16 @@ class CancelShipmentTool(BusinessTool[CancelShipmentInput, CancelShipmentOutput]
         ),
         safety=ToolSafety.DESTRUCTIVE,
         requires_approval=True,
+        # What an approver is shown. Two fields of the three this tool takes,
+        # chosen deliberately: the reference names the consignment somebody is
+        # about to stop, and the reason is the sentence the input schema was
+        # designed to collect for exactly this moment. Everything else the
+        # arguments contain stays where it is.
+        approval_summary=ApprovalSummary(
+            action="Cancel shipment",
+            subject_field="shipment_reference",
+            detail_fields=("reason",),
+        ),
         timeout_seconds=10.0,
     )
     input_model = CancelShipmentInput

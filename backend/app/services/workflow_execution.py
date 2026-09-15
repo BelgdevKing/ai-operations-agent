@@ -51,6 +51,7 @@ from app.repositories.workflow import (
     WorkflowStepRunRepository,
 )
 from app.services.audit import (
+    record_approval_cancelled,
     record_approval_requested,
     record_workflow_run_created,
     record_workflow_run_outcome,
@@ -64,6 +65,7 @@ from app.workflows.exceptions import (
     WorkflowInputError,
     WorkflowNotActiveError,
     WorkflowNotFoundError,
+    WorkflowRunNotCancellableError,
     WorkflowRunNotFoundError,
     WorkflowValidationError,
 )
@@ -304,6 +306,39 @@ class WorkflowService:
         await engine.resume(run, definition, step_run, approved=approved)
 
         await self._audit_outcome(run)
+        return await self._view(run)
+
+    async def cancel_run(self, run_id: uuid.UUID) -> WorkflowRunView:
+        """Stop a workflow run that is waiting on somebody.
+
+        The same shape as the agent runtime's cancellation, for the same
+        reasons: the run is claimed first by conditional update, so a decision
+        arriving at the same moment either finds the run already cancelled - and
+        reports that it cannot be resumed, having executed nothing - or wins the
+        run, in which case this call is told it is not cancellable.
+
+        Raises:
+            WorkflowRunNotFoundError: Not this organization's run.
+            WorkflowRunNotCancellableError: It is not waiting for anybody.
+        """
+        run = await self._runs.get(run_id)
+        if run is None:
+            raise WorkflowRunNotFoundError()
+
+        if not await self._runs.cancel_paused(run.id):
+            raise WorkflowRunNotCancellableError()
+
+        for approval in await self._approvals.list_for_workflow_run(run.id):
+            if approval.status is ApprovalStatus.PENDING:
+                await record_approval_cancelled(self._session, approval, cancelled_by=self._user_id)
+
+        await self._approvals.cancel_for_workflow_run(run.id)
+        await self._steps.cancel_paused(run.id)
+        await self._session.commit()
+
+        await self._audit_outcome(run)
+        await self._session.commit()
+
         return await self._view(run)
 
     # -- Reading runs back -----------------------------------------------------

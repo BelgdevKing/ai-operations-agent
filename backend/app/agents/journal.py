@@ -28,7 +28,7 @@ because it is the only store whose purpose is to hold the tenant's own words.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -101,8 +101,18 @@ class RunJournal(Protocol):
         """Conversation content the run produced, in order."""
         ...
 
-    async def record_approval_request(self, run: AgentRun, attempt: ToolAttempt) -> None:
-        """A person needs to decide about *attempt* before the run can continue."""
+    async def record_approval_request(
+        self, run: AgentRun, attempt: ToolAttempt, arguments: Mapping[str, Any]
+    ) -> None:
+        """A person needs to decide about *attempt* before the run can continue.
+
+        *arguments* is the only place in this protocol where the values a model
+        proposed are handed over, and it is handed over to be **reduced**: the
+        implementation projects it through the tool's own declared allow-list
+        and stores that, never the mapping itself. It is a parameter rather than
+        a field of :class:`ToolAttempt` precisely so that distinction survives -
+        an attempt stays metadata-only wherever else it travels.
+        """
         ...
 
 
@@ -126,8 +136,10 @@ class NullJournal:
     async def record_turns(self, run: AgentRun, turns: Sequence[RecordedTurn]) -> None:
         del run, turns
 
-    async def record_approval_request(self, run: AgentRun, attempt: ToolAttempt) -> None:
-        del run, attempt
+    async def record_approval_request(
+        self, run: AgentRun, attempt: ToolAttempt, arguments: Mapping[str, Any]
+    ) -> None:
+        del run, attempt, arguments
 
 
 NULL_JOURNAL: RunJournal = NullJournal()

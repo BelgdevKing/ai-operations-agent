@@ -232,19 +232,33 @@ async def test_a_workflow_approval_leaves_the_parameters_column_empty(
     assert REASON not in str(approval.parameters)
 
 
-async def test_the_queue_does_not_publish_the_arguments(
+async def test_the_queue_publishes_the_tools_declaration_and_no_payload(
     api_client: AsyncClient, session: AsyncSession
 ) -> None:
+    """A workflow cannot widen what an approver is shown.
+
+    The summary comes from ``CancelShipmentTool``'s own declaration, applied to
+    the interpolated arguments - so a workflow author who wanted to put more of
+    a record in front of a reviewer has no way to ask for it, and one who wanted
+    to put less could not hide the reference either. The declaration belongs to
+    the tool, and the document that calls it is not consulted.
+    """
     account = await register(api_client)
     await seed(session, account.organization_id)
     workflow_id = await published(api_client, account.headers(), cancelling_workflow())
     await start(api_client, account.headers(), workflow_id, payload=payload())
 
     listed = await api_client.get("/api/v1/approvals", headers=account.headers())
+    approval = listed.json()["approvals"][0]
 
-    assert CANCEL in listed.text, "what kind of action it is"
-    assert REFERENCE not in listed.text, "but not what it would do it to"
-    assert REASON not in listed.text
+    assert approval["tool_name"] == CANCEL, "what kind of action it is"
+    assert approval["summary"] == f"Cancel shipment {REFERENCE}", "and which one"
+    assert [field["label"] for field in approval["summary_fields"]] == [
+        "Shipment reference",
+        "Reason",
+    ]
+    assert "parameters" not in approval
+    assert "arguments" not in approval
 
 
 async def test_approval_runs_the_tool_once_and_the_workflow_continues(
@@ -481,7 +495,7 @@ async def test_a_member_may_see_the_queue_but_not_decide(
         decide_url(paused["approval"]["id"], True), headers=member.headers()
     )
 
-    assert len(listed.json()) == 1
+    assert len(listed.json()["approvals"]) == 1
     assert refused.status_code == 403
     assert await shipment_status(session, owner.organization_id) is ShipmentStatus.EXCEPTION
 

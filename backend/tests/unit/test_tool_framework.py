@@ -118,6 +118,10 @@ def test_listed_metadata_carries_no_implementation() -> None:
         "enabled",
         "organization_scoped",
         "requires_approval",
+        # Which arguments an approver may be shown. A declaration about
+        # disclosure rather than a disclosure: it names field names, and the
+        # values only ever reach an approval record.
+        "approval_summary",
         "timeout_seconds",
     }
 
