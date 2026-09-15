@@ -27,9 +27,30 @@ public.
 The whole boundary is one readable file:
 [`backend/app/tools/executor.py`](backend/app/tools/executor.py).
 
-**Evaluating it?** [docs/evaluation.md](docs/evaluation.md) answers what is
-implemented, where the trust boundary is, and what to test first.
-**Wondering if it fits your problem?** [docs/use-cases.md](docs/use-cases.md).
+### See it for yourself
+
+```bash
+git clone https://github.com/BelgdevKing/ai-operations-agent.git
+cd ai-operations-agent && docker compose up --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m scripts.seed_demo_data --attach-user you@example.com
+```
+
+Register at http://localhost:3000/register, open the console, and ask the agent
+to **cancel shipment ABC123**. The run stops at `awaiting_approval` and the
+shipment is untouched until a person decides — which you can check in the
+database before you decide.
+
+Full walkthrough, with what to observe and how to verify each step:
+**[docs/demo.md](docs/demo.md)**. Steps that run an agent need a model provider
+key; everything else does not.
+
+| | |
+| --- | --- |
+| **Can I evaluate it?** | [docs/evaluation.md](docs/evaluation.md) — what is implemented, where the trust boundary is, what to test first |
+| **Does it fit my problem?** | [docs/use-cases.md](docs/use-cases.md) — six worked examples, and where it fits badly |
+| **Can I run it?** | [Quick start](#quick-start) · [docs/demo.md](docs/demo.md) |
+| **Commercially?** | [If this is useful to your team](#if-this-is-useful-to-your-team) |
 
 ---
 
@@ -274,73 +295,51 @@ an agent works; a run then fails with a clear configuration error.
 
 ---
 
-## See it working in five minutes
+## See it working
 
 The repository ships a demo dataset — two organizations with customers,
-shipments, charges and invoices — so there is something for an agent to answer
-questions about.
-
-**1. Create an account** at http://localhost:3000/register, or over the API:
+shipments, charges and invoices — so there is something real for an agent to
+answer questions about.
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"a-long-password",
+# 1. Create an account, at /register or over the API
+curl -X POST http://localhost:8000/api/v1/auth/register   -H 'Content-Type: application/json'   -d '{"email":"you@example.com","password":"a-long-password",
        "organization_name":"Acme Operations"}'
+
+# 2. Load the demo data and attach your account to it
+cd backend && python -m scripts.seed_demo_data --attach-user you@example.com
 ```
 
-Registration returns the user and the organization it created. Sign in
-separately for a token.
+**3. Ask a question.** At http://localhost:3000/ai, pick **Operations
+assistant**: *"Check shipment ABC123 and tell me if there are outstanding
+charges."* It calls `get_shipment` and `get_shipment_charges` and answers. Both
+are declared `read_only`, so neither needs approval.
 
-**2. Load the demo data** and attach your account to it:
+**4. Ask for something destructive.** *"Cancel shipment ABC123."* The run
+**stops** at `awaiting_approval`. `cancel_shipment` is declared `destructive`,
+and a destructive tool cannot opt out of approval — the metadata refuses to
+validate if it tries.
 
-```bash
-cd backend
-python -m scripts.seed_demo_data --attach-user you@example.com
-```
+**5. Check that nothing happened.** The approval is pending at
+http://localhost:3000/approvals, showing the action and an allow-listed summary
+— never the raw tool arguments. The shipment is untouched; query the database
+directly if you would rather not take the application's word for it.
 
-Idempotent — every row's id derives from its business key — and it refuses to
-run unless `APP_ENV=development`.
+**6. Decide.** Approving resumes the same run and cancels the shipment exactly
+once. Rejecting resumes it too, and the agent reports that nothing was
+cancelled. Deciding twice is a conflict, not a second cancellation — the race is
+settled by a conditional `UPDATE`, not by application logic.
 
-**3. Open the console** at http://localhost:3000/ai, pick **Operations
-assistant**, and ask:
+**7. See what it cost.** http://localhost:3000/dashboard, or
+`GET /api/v1/ai/usage`. Cost reports as *unknown* until `LLM_PRICING` is
+configured, rather than reporting zero.
 
-> Check shipment ABC123 and tell me if there are outstanding charges.
+Steps 1, 2, 5 and 7 need no model provider credential; steps 3, 4 and 6 do.
 
-The agent calls `get_shipment` and `get_shipment_charges`, then answers. The
-execution panel shows the step count, tool calls, tokens and model time, and
-each tool call with its outcome.
-
-**4. Ask for something destructive:**
-
-> Cancel shipment ABC123.
-
-`cancel_shipment` is declared `destructive`, so the run **stops**. Its status
-becomes `awaiting_approval` and an approval appears at
-http://localhost:3000/approvals showing the action, the subject and an
-allow-listed summary of the arguments — never the raw tool payload.
-
-**5. Approve or reject it.** Approving resumes the same run and the shipment is
-cancelled exactly once; rejecting resumes it too, and the agent reports that
-nothing was cancelled. Either way the decision, who made it and when are
-durable.
-
-**6. See what it cost** at http://localhost:3000/dashboard, or:
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/ai/usage
-```
-
-Runs, tool executions, approvals and tokens for your organization. Cost appears
-once `LLM_PRICING` is configured; until then it reports *unknown* rather than
-guessing.
-
-**7. Optional — watch the machinery.** With `TRACING_ENABLED=true`, one request
-produces a span tree: the HTTP request, the agent run, each model call, each
-tool execution. With `METRICS_ENABLED=true` and a `METRICS_TOKEN`, `/metrics`
-serves Prometheus text.
-
-Steps 1, 2, 6 and 7 need no model provider credential. Steps 3 to 5 do.
+**[docs/demo.md](docs/demo.md)** is the full operator guide: what to observe at
+each stage, how to verify each claim against the API and the database, how to
+prove the same guarantees with the test suite if you have no provider key, and
+troubleshooting.
 
 ---
 
@@ -478,6 +477,8 @@ Recorded openly rather than answered with a placeholder:
   for one to govern.
 
 None of these has been decided or assumed anywhere in the repository.
+[docs/owner-actions.md](docs/owner-actions.md) collects them with suggested
+values, and is explicit that none has been applied.
 
 ## License
 

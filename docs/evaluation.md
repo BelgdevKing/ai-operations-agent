@@ -222,7 +222,7 @@ pytest tests/integration/test_authorization.py -v
 
 **4. Does the approval gate actually stop something?** This is the demonstration
 worth doing by hand. Seed the demo data, then follow
-[the demo path in the README](../README.md#see-it-working-in-five-minutes):
+[the demo walkthrough](demo.md):
 ask the agent to cancel a shipment, watch the run stop at `awaiting_approval`,
 and check that the shipment is unchanged while the decision is pending.
 

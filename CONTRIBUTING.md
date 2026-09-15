@@ -45,9 +45,10 @@ run unless `APP_ENV=development`. Register the account first; the seeder
 attaches an existing one, it does not create users.
 
 The walkthrough that exercises the interesting paths — a two-tool answer, then
-a destructive request that stops for approval — is in the
-[README](README.md#see-it-working-in-five-minutes). Running an agent needs a
-model provider key; everything else does not.
+a destructive request that stops for approval — is in
+[docs/demo.md](docs/demo.md), with a condensed version in the
+[README](README.md#see-it-working). Running an agent needs a model provider
+key; everything else does not.
 
 Two maintenance scripts exist alongside it, both safe to run repeatedly and both
 supporting `--dry-run`:

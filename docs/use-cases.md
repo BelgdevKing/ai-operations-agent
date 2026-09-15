@@ -211,9 +211,9 @@ Worth being direct about, so you can rule it out quickly:
 
 ## Trying one of these
 
-The demo path in the [README](../README.md#see-it-working-in-five-minutes)
-walks cases 1 and 3 end to end with seeded data: ask a question, get an answer
-from two tools, then ask for a cancellation and watch the run stop for approval.
+[The demo walkthrough](demo.md) covers cases 1 and 3 end to end with seeded
+data: ask a question, get an answer from two tools, then ask for a cancellation
+and watch the run stop for approval.
 
 For judging whether the architecture holds, [evaluation.md](evaluation.md) is
 the more useful document.
