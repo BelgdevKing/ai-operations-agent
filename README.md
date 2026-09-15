@@ -47,10 +47,12 @@ key; everything else does not.
 
 | | |
 | --- | --- |
-| **Can I evaluate it?** | [docs/evaluation.md](docs/evaluation.md) — what is implemented, where the trust boundary is, what to test first |
-| **Does it fit my problem?** | [docs/use-cases.md](docs/use-cases.md) — six worked examples, and where it fits badly |
-| **Can I run it?** | [Quick start](#quick-start) · [docs/demo.md](docs/demo.md) |
-| **Commercially?** | [If this is useful to your team](#if-this-is-useful-to-your-team) |
+| **Can I evaluate it?** | [evaluation.md](docs/evaluation.md) — what is implemented, where the trust boundary is, what to test first |
+| **Does it fit my problem?** | [use-cases.md](docs/use-cases.md) — six worked examples, and where it fits badly |
+| **Can I run it?** | [Quick start](#quick-start) · [demo.md](docs/demo.md) |
+| **How do I extend it?** | [extensions.md](docs/extensions.md) — the eight extension points and their source files |
+| **What would adopting it cost me?** | [adoption.md](docs/adoption.md) — what the platform does, and what a deployment still owes |
+| **Is there professional help?** | [commercial.md](docs/commercial.md) — MIT, self-hosted, no paid tier or hosted service today |
 
 ---
 
@@ -156,20 +158,42 @@ Stated plainly, because the repository contains placeholders for some of it:
 
 ## How it fits together
 
+One request, from the person asking to the row that records it. The gate in the
+middle is the whole point.
+
+```mermaid
+flowchart TD
+    U([Person]) --> C[Agent Console<br/>Next.js]
+    C --> API[FastAPI<br/>auth, tenant, role]
+    API --> RT[Agent runtime<br/>app/agents]
+    RT -->|prompt| GW[LLM gateway<br/>app/ai]
+    GW -->|Anthropic or OpenAI| GW
+    GW -->|proposes a tool name<br/>and arguments| RT
+    RT --> EX[Tool executor<br/>app/tools/executor.py]
+
+    EX --> POL{Safety class<br/>of the tool}
+    POL -->|read_only| RUN[Execute the tool<br/>under a timeout]
+    POL -->|destructive| GATE[/Run pauses<br/>awaiting_approval/]
+
+    GATE --> H([Admin reviews<br/>an allow-listed summary])
+    H -->|approve| RUN
+    H -->|reject| RESUME[Run resumes;<br/>nothing executed]
+
+    RUN --> DB[(PostgreSQL<br/>runs, steps, executions,<br/>approvals, conversations)]
+    RESUME --> DB
+    DB --> OBS[Usage and cost · metrics · traces<br/>app/observability]
+
+    style GATE fill:#fde68a,stroke:#b45309,stroke-width:2px
+    style POL fill:#e0e7ff,stroke:#4338ca
 ```
-  Browser ──► Next.js console ──► FastAPI
-                                    │
-              ┌─────────────────────┼─────────────────────┐
-              ▼                     ▼                     ▼
-        Agent runtime         Workflow engine       Approval service
-              │                     │                     │
-              └─────────┬───────────┴──────────┬──────────┘
-                        ▼                      ▼
-                  Tool executor           LLM gateway
-                        │                      │
-                        ▼                      ▼
-                   PostgreSQL          Anthropic / OpenAI
-```
+
+The model's only output is the arrow labelled *proposes*. Everything after it —
+resolving the name, validating the arguments, checking the safety class,
+pausing, executing, recording — is the platform's, and none of it can be
+skipped by anything the model writes.
+
+Workflows run the same path with a step machine in front of it
+(`app/workflows/engine.py`), and can place an approval gate at any step.
 
 A **modular monolith**: one deployable, layered by responsibility
 (`api → services → repositories → models`), with the agent runtime, tool
@@ -460,6 +484,9 @@ stated here plainly.
 
 No customers, revenue, partnerships, production deployments or prior engagements
 exist. Nothing here should be read as implying otherwise.
+
+[docs/commercial.md](docs/commercial.md) has the full position: what the licence
+permits, what self-hosting involves, and why a hosted offering does not exist.
 
 ## Decisions not yet made
 

@@ -88,19 +88,25 @@ of the repository avoids. Create the file if and when a destination exists.
 ### Commercial contact route
 
 There is none. No email address, contact form or scheduling link appears
-anywhere in the repository, and none has been invented. The README says so
-plainly rather than leaving a placeholder.
+anywhere in the repository, and none has been invented. The README and
+[commercial.md](commercial.md) both say so plainly rather than leaving a
+placeholder.
 
 Until one exists, GitHub Issues is the only route. If you want commercial
 enquiries, a route has to be created and then referenced from
-[the README](../README.md#if-this-is-useful-to-your-team) and
-[SECURITY.md](../SECURITY.md).
+[the README](../README.md#if-this-is-useful-to-your-team),
+[commercial.md](commercial.md#contact) and [SECURITY.md](../SECURITY.md).
 
 ### Whether to offer paid work at all
 
-The README lists five kinds of work the codebase could be a foundation for, and
-states that none is currently sold. Whether any becomes real — and whether the
-project wants that — is unanswered.
+[commercial.md](commercial.md#potential-professional-services) lists ten kinds
+of work the codebase could be a foundation for and states plainly that none is
+offered, none has been performed and no rate has been set. Whether any becomes
+real — and whether the project wants that — is unanswered.
+
+A hosted offering is documented as a *possible future direction only*, with the
+missing pieces named: billing, quotas, rate limiting, sign-up, account lifecycle
+and operational tooling. None of it is started.
 
 ### Repository name and organization
 
@@ -115,6 +121,17 @@ need updating.
 Deliberately absent. It is boilerplate until there are contributors for it to
 govern, and adding it early is a signal of process rather than of care. Worth
 adding when the first outside contributor arrives.
+
+### Whether to push
+
+`main` is many commits ahead of `origin/main`, which still sits at an early
+commit — check with `git status -sb`. Publishing is a decision rather than a
+chore: everything here has been written on the assumption a stranger will read
+it, so pushing is the moment the project effectively becomes public, whatever
+the visibility setting says.
+
+Worth doing first: read [SECURITY.md](../SECURITY.md) and confirm its scope
+section says what you are willing to commit to publicly.
 
 ---
 

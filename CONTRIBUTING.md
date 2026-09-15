@@ -151,15 +151,71 @@ existing framework cannot.
   verify. "I could not test the Docker build, no daemon here" is a useful
   sentence.
 
-## Where to read first
+## Developer map
 
-If you are trying to understand the shape of the thing before changing it:
+Where things are. Start with the three files at the bottom if you only read
+three.
 
-- [docs/evaluation.md](docs/evaluation.md) — where the trust boundary is, how
-  isolation and approvals work, and what to test first.
-- [docs/architecture.md](docs/architecture.md) — the design and the reasoning.
-- `backend/app/tools/executor.py` — the trust boundary in one file.
+### Backend — `backend/app/`
+
+| Looking for | Path |
+| --- | --- |
+| Application factory, middleware, router mounting | `main.py` |
+| Config, database, cache, logging, errors, security | `core/` |
+| HTTP routes | `api/v1/endpoints/` — one module per resource |
+| Dependency wiring (settings, session, services) | `api/deps.py` |
+| Health and readiness probes | `api/health.py` |
+| Agent runtime — the tool-use loop, run state, cancellation | `agents/` (`runtime.py`, `runner.py`, `registry.py`) |
+| Tool registry, executor, safety classes | `tools/` (`executor.py`, `registry.py`, `models.py`) |
+| The built-in business tools | `tools/business/` |
+| The approval-summary allow-list | `tools/summary.py` |
+| Workflow definitions and the state machine | `workflows/` (`definition.py`, `engine.py`) |
+| Approval decisions and resume | `services/approvals.py` |
+| Agent and workflow execution services | `services/agent_execution.py`, `services/workflow_execution.py` |
+| Conversations | `services/`, `repositories/conversation.py`, `models/conversation.py` |
+| Usage and cost | `services/usage.py`, `repositories/usage.py`, `observability/pricing.py` |
+| Metrics, tracing, the telemetry vocabulary | `observability/` (`metrics.py`, `tracing.py`, `names.py`) |
+| The one place the tenant filter is written | `repositories/tenant.py` |
+| LLM gateway and provider adapters | `ai/` — only `ai/providers/` may import a vendor SDK |
+| The demo dataset | `demo/`, loaded by `scripts/seed_demo_data.py` |
+| Migrations | `backend/alembic/versions/` |
+| Tests | `backend/tests/unit/`, `backend/tests/integration/` |
+
+### Frontend — `frontend/src/`
+
+| Looking for | Path |
+| --- | --- |
+| Routes; `(app)` is the authenticated group | `app/` |
+| Agent console | `components/console/`, `components/ai/` |
+| Approval inbox | `components/approvals/` |
+| Workflows, usage, organization screens | `components/workflows/`, `components/usage/`, `components/organization/` |
+| The single API client and error presentation | `lib/api/` |
+| Session handling | `lib/auth/` |
+| Build-time configuration | `lib/config.ts` |
+| Tests | `frontend/tests/` — Node's built-in runner, no framework |
+
+### Deployment and CI
+
+| Looking for | Path |
+| --- | --- |
+| Development stack | `docker-compose.yml` |
+| Deployed stack | `docker-compose.prod.yml` |
+| Images — `development` and `production` targets | `infrastructure/docker/` |
+| CI | `.github/workflows/ci.yml` |
+| The runbook | [docs/deployment.md](docs/deployment.md) |
+
+### If you read only three files
+
+- `backend/app/tools/executor.py` — the trust boundary, start to finish.
 - `backend/app/repositories/tenant.py` — the one place the tenant filter lives.
+- `backend/app/services/approvals.py` — the approval decision and the resume.
+
+### Documentation
+
+[evaluation.md](docs/evaluation.md) for the boundaries and how to check them ·
+[extensions.md](docs/extensions.md) for where to plug your own work in ·
+[architecture.md](docs/architecture.md) for the design and the reasoning ·
+[demo.md](docs/demo.md) to see it run.
 
 ## Reporting bugs
 
