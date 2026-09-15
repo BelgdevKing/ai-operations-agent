@@ -3,6 +3,12 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/BelgdevKing/ai-operations-agent/security/advisories/new
     about: Report privately through GitHub. Never in a public issue - see SECURITY.md.
-  - name: Question about running it
+  - name: Evaluating the project
+    url: https://github.com/BelgdevKing/ai-operations-agent/blob/main/docs/evaluation.md
+    about: What is implemented, where the trust boundary is, and what to test first.
+  - name: Does it fit my problem?
+    url: https://github.com/BelgdevKing/ai-operations-agent/blob/main/docs/use-cases.md
+    about: Worked examples of what the implemented capabilities support.
+  - name: Getting it running
     url: https://github.com/BelgdevKing/ai-operations-agent/blob/main/README.md#quick-start
     about: The quick start, the demo path and the configuration table are in the README.

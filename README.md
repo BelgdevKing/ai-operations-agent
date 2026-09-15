@@ -11,6 +11,26 @@ call, approval and token is recorded.
 Open-source, MIT, self-hosted. Built as a portfolio project and developed in
 public.
 
+### The distinction that matters
+
+> **The model proposes. The platform disposes.**
+>
+> A language model emits a tool name and arguments — nothing more. The platform
+> resolves the name in a registry, rejects reserved argument names, validates
+> the arguments against a schema, checks the tool is permitted, stops for a
+> human if the tool is destructive, executes it itself under a timeout, bounds
+> the result, and records what happened.
+>
+> There is no path from model output to execution that skips those steps. The
+> model never holds authority, a credential or a database connection.
+
+The whole boundary is one readable file:
+[`backend/app/tools/executor.py`](backend/app/tools/executor.py).
+
+**Evaluating it?** [docs/evaluation.md](docs/evaluation.md) answers what is
+implemented, where the trust boundary is, and what to test first.
+**Wondering if it fits your problem?** [docs/use-cases.md](docs/use-cases.md).
+
 ---
 
 ## The problem
@@ -38,6 +58,42 @@ stops the destructive ones until a named human approves.
 
 It is **not** a finished commercial product, and nobody is running it in
 production. See [Project status](#project-status).
+
+## Why this architecture
+
+Nine properties, each chosen because the obvious alternative fails in a way
+that is expensive to discover later. All of them are implemented.
+
+- **Tools execute server-side.** The model names one; the platform runs it.
+  Handing execution to the model means an injected instruction is an executed
+  instruction.
+- **Destructive actions stop for a person.** A tool declared `destructive`
+  cannot opt out — the metadata refuses to validate if it tries, so the mistake
+  is caught when the tool is written rather than when it fires.
+- **Authorization is tenant-aware and server-side.** The active organization
+  arrives in a header that is checked against membership every request. It
+  selects a tenant; it never grants one.
+- **Execution state is durable.** A run is rows, not memory. One that pauses
+  for an approval survives the request that started it, and a person can decide
+  hours later.
+- **Concurrency is settled in the database.** Decisions and executions are
+  claimed by conditional `UPDATE`; `rowcount == 1` is the proof of winning. Two
+  approvers clicking at once produce one decision, not two cancellations.
+- **Cost is accounted per tenant.** Derived from the execution tables at read
+  time rather than accumulated into a counter that can drift from what
+  happened. An unpriced model reports *unknown*, never zero.
+- **Telemetry carries no identity.** No tenant id, no execution id, no prompt,
+  no tool argument, no result — in a log, a metric or a span. Enforced by
+  allow-lists, and asserted by tests against real runs.
+- **Failure is bounded and legible.** Every external wait has a ceiling. A
+  dependency outage answers `503`, not `500`, because a client and an on-call
+  engineer act differently on the two.
+- **Self-hosted, with no vendor lock.** Your host, your PostgreSQL, your choice
+  of Anthropic or OpenAI behind one gateway — and which one served a request is
+  deliberately absent from every durable row.
+
+The reasoning behind each is in [docs/architecture.md](docs/architecture.md);
+how to check them is in [docs/evaluation.md](docs/evaluation.md).
 
 ---
 
@@ -378,37 +434,50 @@ Not started:
 
 ---
 
-## Commercial
+## If this is useful to your team
 
-The platform is MIT licensed and self-hostable in full. There is **no paid
-tier, no hosted service and no support contract today** — if any appear, they
-will be listed here.
+The platform is MIT licensed and self-hostable in full — no key, no account, no
+hosted dependency. Everything described above works without paying anyone.
 
-The kinds of work this codebase is a reasonable starting point for:
+There is **no paid tier, no hosted service and no support contract today.** The
+list below is what commercial work around a project like this could look like,
+not a set of products being sold. If any of it ever becomes real, it will be
+stated here plainly.
 
-- **Deployment and integration** — standing it up, connecting it to real
-  operational systems, replacing the demo tools with yours.
-- **Custom tools, agents and workflows** — the tool registry and the workflow
-  definition format are the extension points.
-- **Architecture review** — tenant isolation, approval semantics and agent
-  safety, for teams building something similar.
+| Potential service | What it would involve |
+| --- | --- |
+| **Deployment and integration** | Standing the platform up in your environment and connecting it to the systems it needs to read and act on. |
+| **Custom tools** | Tools against your systems, with the safety classes and approval policy that match your risk. |
+| **Workflow implementation** | Operational procedures built on the existing execution and approval architecture. |
+| **Architecture review** | Tenant isolation, approval semantics, agent safety, observability and reliability — for teams building something comparable. |
+| **Custom development** | Extending the platform for a specific operational environment. |
 
-> **Open decision:** no contact route is published in this repository yet.
-> Until one is, GitHub Issues is the way to reach the maintainer. See
-> [Decisions not yet made](#decisions-not-yet-made).
+> **Commercial contact route: not configured yet.**
+>
+> No email address, contact form or scheduling link is published in this
+> repository, and none has been invented for it. GitHub Issues is the only
+> route that exists today. Establishing one is an
+> [open decision](#decisions-not-yet-made) for the project owner.
 
-No customers, revenue, partnerships or production deployments exist. Nothing
-here should be read as implying otherwise.
+No customers, revenue, partnerships, production deployments or prior engagements
+exist. Nothing here should be read as implying otherwise.
 
 ## Decisions not yet made
 
 Recorded openly rather than answered with a placeholder:
 
 - A contact address or form for commercial enquiries and security reports.
+- Whether to offer paid deployment, integration or development work at all.
 - Whether to publish a hosted version, and on what terms.
 - Whether the project moves to a GitHub organization, and keeps this name.
+- The repository description, topics and social preview image — all GitHub
+  settings, none of which this repository can configure for itself.
+- Whether to enable Discussions, private vulnerability reporting, and GitHub
+  Sponsors or another funding route.
 - Whether to adopt a code of conduct — deferred until there are contributors
   for one to govern.
+
+None of these has been decided or assumed anywhere in the repository.
 
 ## License
 

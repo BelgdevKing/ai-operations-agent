@@ -29,6 +29,34 @@ Integration tests need a reachable PostgreSQL. Without one they skip themselves
 rather than fail, so a passing run on a machine with no database has proved
 less than it looks — check the skip count.
 
+### Something to work against
+
+The repository ships a demo dataset — two organizations with customers,
+shipments, charges and invoices — so there is data for an agent to answer
+questions about:
+
+```bash
+cd backend
+python -m scripts.seed_demo_data --attach-user you@example.com
+```
+
+It is idempotent (every row's id derives from its business key) and refuses to
+run unless `APP_ENV=development`. Register the account first; the seeder
+attaches an existing one, it does not create users.
+
+The walkthrough that exercises the interesting paths — a two-tool answer, then
+a destructive request that stops for approval — is in the
+[README](README.md#see-it-working-in-five-minutes). Running an agent needs a
+model provider key; everything else does not.
+
+Two maintenance scripts exist alongside it, both safe to run repeatedly and both
+supporting `--dry-run`:
+
+```bash
+python -m scripts.expire_approvals --dry-run
+python -m scripts.sweep_abandoned_runs --dry-run
+```
+
 ## Before you open a pull request
 
 Run what CI runs. It is the same set of commands, not a CI-only variant:
@@ -121,6 +149,16 @@ existing framework cannot.
 - Say what you ran and what the result was, including anything you could not
   verify. "I could not test the Docker build, no daemon here" is a useful
   sentence.
+
+## Where to read first
+
+If you are trying to understand the shape of the thing before changing it:
+
+- [docs/evaluation.md](docs/evaluation.md) — where the trust boundary is, how
+  isolation and approvals work, and what to test first.
+- [docs/architecture.md](docs/architecture.md) — the design and the reasoning.
+- `backend/app/tools/executor.py` — the trust boundary in one file.
+- `backend/app/repositories/tenant.py` — the one place the tenant filter lives.
 
 ## Reporting bugs
 
