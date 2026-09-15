@@ -29,6 +29,7 @@ from pydantic import BaseModel, ValidationError
 from app.agents.cancellation import NEVER_CANCELLED, CancellationToken
 from app.core.config import Settings
 from app.observability.instruments import Instruments, NullInstruments
+from app.observability.tracing import Span, span
 from app.tools.base import AnyTool
 from app.tools.exceptions import (
     ToolApprovalRejectedError,
@@ -158,42 +159,69 @@ class ToolExecutor:
 
         metadata: ToolMetadata | None = None
 
-        try:
-            tool = self._registry.resolve(request.tool_name)
-            metadata = tool.metadata
+        # The span carries the tool's registered name and how the attempt
+        # ended, which is what a trace needs to show where an agent's time
+        # went. Not the arguments the model chose and not what came back: both
+        # are the tenant's business data, and the allow-list would drop them.
+        # Not the execution id either - it is in the log, correlated by request
+        # id, where it is bounded by a retention policy somebody chose.
+        with span("tool.execute", attributes={"tool.name": request.tool_name}) as current:
+            try:
+                tool = self._registry.resolve(request.tool_name)
+                metadata = tool.metadata
 
-            self._check_enabled(metadata)
-            self._check_permitted(metadata, context)
+                self._check_enabled(metadata)
+                self._check_permitted(metadata, context)
 
-            arguments = self._validate_arguments(tool, request)
+                arguments = self._validate_arguments(tool, request)
 
-            self._check_approval(metadata, approval)
-            self._check_cancelled(cancellation)
+                self._check_approval(metadata, approval)
+                self._check_cancelled(cancellation)
 
-            output = await self._run(tool, arguments, context)
+                output = await self._run(tool, arguments, context)
 
-            # After execution as well: work that finished while somebody was
-            # stopping the run is still work that should not be reported as an
-            # answer. The side effect has happened either way - that is the
-            # honest limit of cooperative cancellation, and the log records it.
-            self._check_cancelled(cancellation)
+                # After execution as well: work that finished while somebody was
+                # stopping the run is still work that should not be reported as an
+                # answer. The side effect has happened either way - that is the
+                # honest limit of cooperative cancellation, and the log records it.
+                self._check_cancelled(cancellation)
 
-            data = self._validate_result(tool, output)
+                data = self._validate_result(tool, output)
 
-        except ToolError as exc:
-            result = self._failure_result(execution_id, request.tool_name, exc, elapsed_ms(started))
+            except ToolError as exc:
+                result = self._failure_result(
+                    execution_id, request.tool_name, exc, elapsed_ms(started)
+                )
+                self._log(result, context, metadata, arguments_count=len(request.arguments))
+                self._describe(current, result, metadata)
+                return result
+
+            result = ToolResult(
+                tool_execution_id=execution_id,
+                tool_name=request.tool_name,
+                outcome=ToolOutcome.SUCCEEDED,
+                data=data,
+                duration_ms=elapsed_ms(started),
+            )
             self._log(result, context, metadata, arguments_count=len(request.arguments))
+            self._describe(current, result, metadata)
             return result
 
-        result = ToolResult(
-            tool_execution_id=execution_id,
-            tool_name=request.tool_name,
-            outcome=ToolOutcome.SUCCEEDED,
-            data=data,
-            duration_ms=elapsed_ms(started),
+    @staticmethod
+    def _describe(current: Span, result: ToolResult, metadata: ToolMetadata | None) -> None:
+        """Put the outcome on the span, from the same values the metric used."""
+        current.set_attributes(
+            {
+                "tool.outcome": result.outcome.value,
+                "tool.safety": metadata.safety.value if metadata else "unknown",
+            }
         )
-        self._log(result, context, metadata, arguments_count=len(request.arguments))
-        return result
+        if result.failure is not None:
+            current.set_attributes({"error.code": result.failure.code, "error.layer": "tool"})
+            # A refusal is a decision somebody made, not a fault of this
+            # service - the same distinction the console makes on screen.
+            if result.outcome is not ToolOutcome.REJECTED:
+                current.set_status("error")
 
     # -- The steps -------------------------------------------------------------
 

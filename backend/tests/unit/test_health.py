@@ -147,12 +147,17 @@ async def test_readiness_degraded_when_postgres_is_down(
 
 
 def test_liveness_reports_the_configured_environment() -> None:
-    # staging requires a real JWT secret and the selected provider's key.
+    # A deployed environment refuses the shipped defaults - the JWT secret, the
+    # database password and DEBUG - and needs the selected provider's key. Each
+    # of those rules is tested where it belongs; here they are only the price of
+    # asking what staging reports about itself.
     service = HealthService(
         Settings(
             app_env="staging",
             app_name="Svc",
             jwt_secret_key="s" * 48,
+            database_url="postgresql+asyncpg://aiops:real@db:5432/aiops",
+            debug=False,
             anthropic_api_key="test-anthropic-secret",
         )
     )

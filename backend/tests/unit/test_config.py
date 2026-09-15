@@ -51,6 +51,10 @@ def test_values_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> No
     # Production also requires the selected LLM provider's key; see
     # tests/unit/test_ai_configuration.py for that rule on its own.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-secret")
+    # And it refuses the published development database password, and DEBUG.
+    # Both have their own tests below.
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://aiops:real@db:5432/aiops")
+    monkeypatch.setenv("DEBUG", "false")
 
     settings = Settings()
 

@@ -1,7 +1,12 @@
 # ---------- Secrets ----------
+# Everything that looks like an environment file is ignored, and the templates
+# are named back in one at a time. A new .env.<something> is therefore ignored
+# by default, which is the right way round: the cost of forgetting to ignore a
+# real one is a published credential.
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.pem
 *.key
 

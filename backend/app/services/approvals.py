@@ -63,6 +63,7 @@ from app.models.approval import Approval
 from app.models.enums import ApprovalStatus
 from app.models.organization import OrganizationMember
 from app.observability.instruments import Instruments, NullInstruments
+from app.observability.tracing import Span, span
 from app.repositories.agent_run import AgentRunRepository, ToolExecutionRepository
 from app.repositories.approval import ApprovalRepository
 from app.repositories.conversation import (
@@ -286,6 +287,31 @@ class ApprovalService:
         cancellation: CancellationToken = NEVER_CANCELLED,
     ) -> ApprovalDecision:
         """Record a decision and carry whatever was waiting forward.
+
+        A thin wrapper so the work below is one span: deciding an approval
+        resumes an agent run or a workflow run, and those become its children,
+        which is what makes a trace show what a person's click actually set off.
+        The span carries which way it went and nothing else - not who decided,
+        not which approval, not what was approved. All three are in the durable
+        audit trail, which is where they belong and where they are scoped to a
+        tenant.
+        """
+        with span("approval.decide") as current:
+            result = await self._decide(
+                approval_id, approve=approve, reason=reason, cancellation=cancellation
+            )
+            current.set_attribute("approval.decision", result.approval.status.value)
+            return result
+
+    async def _decide(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        approve: bool,
+        reason: str | None,
+        cancellation: CancellationToken,
+    ) -> ApprovalDecision:
+        """The decision itself. See :meth:`decide`.
 
         The caller must already have been authorised - the endpoint requires the
         admin role, and that is the security boundary. Nothing here consults a
@@ -531,21 +557,29 @@ class ApprovalService:
         journal: DatabaseRunJournal,
         cancellation: CancellationToken,
     ) -> None:
-        """Continue the run, and record where it got to either way."""
-        try:
-            await self._runtime().resume(
-                run,
-                history,
-                request=request,
-                result=result,
-                journal=journal,
-                cancellation=cancellation,
-            )
-        except (AgentCancelledError, AgentError, LLMError):
-            await record_agent_run(self._session, run)
-            raise
+        """Continue the run, and record where it got to either way.
 
-        await record_agent_run(self._session, run)
+        The span matches the one the execution service opens when a run starts,
+        so a resumed run looks like a run in a trace rather than like a loose
+        model call under an approval.
+        """
+        with span("agent.run") as current:
+            try:
+                await self._runtime().resume(
+                    run,
+                    history,
+                    request=request,
+                    result=result,
+                    journal=journal,
+                    cancellation=cancellation,
+                )
+            except (AgentCancelledError, AgentError, LLMError):
+                await record_agent_run(self._session, run)
+                _describe_run(current, run)
+                raise
+
+            await record_agent_run(self._session, run)
+            _describe_run(current, run)
 
     async def _view(self, record: AgentRunRecord) -> RunView:
         """The run as a client sees it, projected by the execution service."""
@@ -566,3 +600,22 @@ def _waited(approval: Approval) -> float | None:
     if approval.approved_at is None:
         return None
     return max((approval.approved_at - approval.requested_at).total_seconds(), 0.0)
+
+
+def _describe_run(current: Span, run: AgentRun) -> None:
+    """A resumed run's outcome, described exactly as a new one's is.
+
+    Kept identical to AgentExecutionService._describe on purpose: a trace that
+    labelled the same thing two ways depending on which service drove it would
+    be worse than one that labelled it once.
+    """
+    current.set_attributes(
+        {
+            "agent.status": run.status.value,
+            "agent.step_count": run.step_count,
+            "agent.tool_call_count": len(run.tool_calls),
+        }
+    )
+    if run.error_code:
+        current.set_attributes({"error.code": run.error_code, "error.layer": "agent"})
+        current.set_status("error")

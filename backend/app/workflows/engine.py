@@ -58,6 +58,7 @@ from app.models.approval import Approval
 from app.models.enums import ApprovalStatus, RunStatus, StepRunStatus, WorkflowStepType
 from app.models.workflow import WorkflowRun, WorkflowStepRun
 from app.observability.instruments import Instruments, NullInstruments
+from app.observability.tracing import span
 from app.repositories.agent_run import ToolExecutionRepository
 from app.repositories.approval import ApprovalRepository
 from app.repositories.workflow import WorkflowRunRepository, WorkflowStepRunRepository
@@ -327,8 +328,21 @@ class WorkflowEngine:
 
             await self._session.commit()
 
-            outcome = await self._execute(step, context, step_run)
-            await self._finish_step(run, step_run, outcome, context)
+            # One span per step, so a trace shows which step a workflow spent
+            # its time in. The step's *type* is an enum; its key is a name the
+            # workflow author chose, and therefore unbounded - the same reason
+            # the metric label below is the type rather than the key.
+            with span(
+                "workflow.step",
+                attributes={"workflow.step_type": step_run.step_type.value},
+            ) as current_span:
+                outcome = await self._execute(step, context, step_run)
+                await self._finish_step(run, step_run, outcome, context)
+                current_span.set_attribute("workflow.step_status", outcome.status.value)
+                if outcome.error_code:
+                    current_span.set_attributes(
+                        {"error.code": outcome.error_code, "error.layer": "workflow"}
+                    )
 
             if outcome.paused or outcome.failed:
                 return run

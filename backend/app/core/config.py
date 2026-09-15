@@ -26,6 +26,12 @@ JWTAlgorithm = Literal["HS256", "HS384", "HS512"]
 # Deliberately obvious. Never use this outside local development.
 DEV_JWT_SECRET_KEY = "dev-only-insecure-jwt-secret-change-me"
 
+# The password the development stack ships with, in the repository, in plain
+# sight. Refused in a deployed environment for the same reason as the JWT key
+# above: a default that is published is not a secret, and the way that mistake
+# reaches production is that nothing ever objected to it.
+DEV_DATABASE_PASSWORD = "aiops_dev_password"
+
 # Hard ceilings on the agent runtime. A deployment may be stricter than these;
 # it may not be more permissive, so a misconfigured environment variable cannot
 # turn one request into an unbounded spend. Mirrored in app/agents/models.py,
@@ -103,6 +109,16 @@ class Settings(BaseSettings):
 
     # Mount point for the versioned API. Probe endpoints stay outside it.
     api_v1_prefix: str = "/api/v1"
+
+    docs_enabled: bool = Field(
+        default=True,
+        description="Whether the interactive API documentation (/docs, /redoc) "
+        "and the OpenAPI schema are served. On by default, because a platform "
+        "nobody can read the contract of is not much of a platform; the "
+        "production manifest turns it off, because a schema of every route, "
+        "every field and every error code is a map, and a deployment gets to "
+        "decide who is handed one.",
+    )
 
     # -- Logging -------------------------------------------------------------
     log_level: str = "INFO"
@@ -330,6 +346,27 @@ class Settings(BaseSettings):
         "validator; there is no unauthenticated mode.",
     )
 
+    # Tracing answers "where did this one request go", which makes it the
+    # telemetry most likely to carry something it should not. What it may carry
+    # is an allow-list in app/observability/names.py; what follows is only
+    # whether it runs at all.
+    tracing_enabled: bool = Field(
+        default=False,
+        description="Whether spans are recorded. Off by default. While it is "
+        "off no span is built, no trace id is bound to the request context and "
+        "the logs are byte-for-byte what they were before tracing existed.",
+    )
+    tracing_sample_ratio: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of traces recorded, decided from the trace id so "
+        "that every service in one trace reaches the same answer. 1.0 records "
+        "everything, which is right until the volume says otherwise. A trace "
+        "whose caller already decided to record it is recorded regardless - "
+        "half a trace is worse than none.",
+    )
+
     llm_pricing: str = Field(
         default="",
         description="The price book, as JSON. Empty by default, which is the "
@@ -396,6 +433,60 @@ class Settings(BaseSettings):
                     f"JWT_SECRET_KEY must be at least {MIN_PRODUCTION_SECRET_LENGTH} "
                     f"characters in {self.app_env}."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_the_published_database_password(self) -> Settings:
+        """Refuse a deployed environment pointed at the development password.
+
+        ``aiops_dev_password`` is in ``docker-compose.yml`` and in this file. A
+        deployment that kept it has a database anyone who has read the
+        repository can open, and the failure mode is silent: everything works.
+        Matched on the URL rather than parsed out of it, because a password can
+        be percent-encoded and the point is to catch the copied default, not to
+        reimplement a URL parser.
+        """
+        if self.app_env in ("production", "staging"):
+            if DEV_DATABASE_PASSWORD in self.database_url:
+                raise ValueError(
+                    "DATABASE_URL still contains the development password. "
+                    f"Set a real one before running in {self.app_env}."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_debug_in_a_deployed_environment(self) -> Settings:
+        """``DEBUG`` is a development switch, and deployment is not development.
+
+        Nothing branches on it today - ``create_app`` deliberately does not hand
+        it to Starlette, because Starlette's debug mode answers an unhandled
+        exception with a traceback and bypasses the error envelope. That is
+        exactly why it is refused here rather than ignored: the first thing that
+        *does* branch on it should not find it already true in production.
+        """
+        if self.app_env in ("production", "staging") and self.debug:
+            raise ValueError(f"DEBUG must be false in {self.app_env}.")
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_a_wildcard_cors_origin(self) -> Settings:
+        """A deployed environment must name the origins it trusts.
+
+        ``*`` is not a relaxed setting here, it is a broken one. The application
+        sends ``allow_credentials=True``, and the CORS specification forbids
+        pairing that with a literal ``*`` - so Starlette echoes the requesting
+        origin back instead, which means every site on the internet is allowed
+        to make credentialed calls to this API on behalf of whoever is signed
+        in. The fix is a list of origins, and the place to find that out is
+        start-up.
+        """
+        if self.app_env in ("production", "staging") and "*" in self.cors_origin_list:
+            raise ValueError(
+                "CORS_ORIGINS must list the exact origins in "
+                f"{self.app_env}; '*' cannot be combined with credentials. "
+                "An empty value is allowed and means no browser origin is "
+                "trusted."
+            )
         return self
 
     @model_validator(mode="after")

@@ -65,12 +65,15 @@ ai-operations-agent/
 │   ├── src/types/             # shared TypeScript types
 │   └── .env.example           # native development settings
 ├── infrastructure/
-│   ├── docker/backend/        # backend Dockerfile
-│   ├── docker/frontend/       # frontend Dockerfile
+│   ├── docker/backend/        # backend Dockerfile (development | production)
+│   ├── docker/frontend/       # frontend Dockerfile (development | production)
 │   └── postgres/init/         # extensions created on first start
-├── docs/                      # architecture, native Windows setup, ADRs
-├── docker-compose.yml         # the containerised stack
+├── docs/                      # architecture, deployment, Windows setup, ADRs
+├── .github/workflows/         # continuous integration
+├── docker-compose.yml         # local development stack
+├── docker-compose.prod.yml    # deployed stack
 ├── .env.example               # environment template for Docker
+├── .env.production.example    # environment template for a deployment
 └── LICENSE                    # MIT
 ```
 
@@ -146,6 +149,23 @@ npm run dev
 One-time database setup, environment files, shell-specific activation and
 troubleshooting are covered in
 **[docs/development-windows.md](docs/development-windows.md)**.
+
+### Deploying it
+
+`docker-compose.yml` is development: it bind-mounts source, reloads on change,
+and every value has a working default so a fresh checkout starts. None of that
+belongs in a deployment, so a deployment has its own stack.
+
+```bash
+cp .env.production.example .env.production   # placeholders only; fill it in
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+```
+
+Runtime-only images, migrations as a step of their own, no host ports on the
+database, and a deployed environment that refuses to start on any secret this
+repository publishes. The procedure, the configuration, the rollback and what
+to do when something is wrong are in
+**[docs/deployment.md](docs/deployment.md)**.
 
 ## Roadmap
 

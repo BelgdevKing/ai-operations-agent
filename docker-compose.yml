@@ -1,6 +1,11 @@
 # =============================================================================
 # AI Operations Agent Platform - local development stack
 #
+# This file is development. For a deployed environment see
+# docker-compose.prod.yml and docs/deployment.md - the two share the same
+# Dockerfiles and differ by build target, so nothing here has to be undone
+# there.
+#
 #   docker compose up --build      start everything
 #   docker compose ps              show status and health
 #   docker compose logs -f backend tail a service
@@ -68,6 +73,9 @@ services:
     build:
       context: ./backend
       dockerfile: ../infrastructure/docker/backend/Dockerfile
+      # Named explicitly: the Dockerfile's last stage is `production`, so a
+      # build without a target would quietly hand this stack the wrong image.
+      target: development
     image: aiops-backend:dev
     container_name: aiops-backend
     restart: unless-stopped
@@ -78,6 +86,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-console}
       API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
+      DOCS_ENABLED: ${DOCS_ENABLED:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://aiops:aiops_dev_password@postgres:5432/aiops}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -98,6 +107,14 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_RETRY_MAX_DELAY_SECONDS: ${LLM_RETRY_MAX_DELAY_SECONDS:-8}
       LLM_ALLOWED_MODELS: ${LLM_ALLOWED_MODELS:-}
+      # Observability, off by default here as it is everywhere. Passed through
+      # so a developer can turn either on without editing this file - metrics
+      # need a token whatever the environment, and tracing writes one log line
+      # per request.
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      TRACING_SAMPLE_RATIO: ${TRACING_SAMPLE_RATIO:-1.0}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -119,6 +136,7 @@ services:
     build:
       context: ./frontend
       dockerfile: ../infrastructure/docker/frontend/Dockerfile
+      target: development
     image: aiops-frontend:dev
     container_name: aiops-frontend
     restart: unless-stopped

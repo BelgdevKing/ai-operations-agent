@@ -1,0 +1,271 @@
+# =============================================================================
+# Continuous integration
+#
+# Runs the checks a reviewer would run, in the order they fail fastest, against
+# the same commands developers use locally - there is no CI-only test runner
+# and no CI-only lint configuration to drift out of step with the repository.
+#
+# Four jobs, deliberately separate so a red result says where:
+#
+#   backend    ruff, mypy, the migration chain, then the test suite against a
+#              real PostgreSQL - the integration tests skip themselves when the
+#              database is unreachable, so running them without one would be a
+#              green result that proved nothing.
+#   frontend   eslint, tsc, the Node test runner, and a production build.
+#   images     both production images actually build, and the deployed Compose
+#              manifest actually parses. Nothing is pushed anywhere.
+#   secrets    nothing that looks like a credential is in the tree.
+#
+# No deployment step. Publishing an image or touching a server needs registry
+# and host credentials, and inventing a pipeline for infrastructure that does
+# not exist yet would be a worse answer than docs/deployment.md.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only. This workflow needs nothing else, and a token that can write is a
+# token that a compromised dependency can write with.
+permissions:
+  contents: read
+
+# A new push supersedes the run in flight for the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # The same image the stack runs, so the extensions and the server
+        # version under test are the ones that will be deployed.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: aiops
+          POSTGRES_PASSWORD: ci_only_not_a_deployment_password
+          POSTGRES_DB: aiops_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aiops -d aiops_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # APP_ENV=test, so the production refusals - real JWT secret, real
+      # database password, DEBUG off - do not apply. Those rules have their own
+      # tests in tests/unit/test_production_config.py, which is where they
+      # belong; asserting them by configuring CI as production would prove
+      # nothing about the code.
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://aiops:ci_only_not_a_deployment_password@localhost:5432/aiops_test
+      REDIS_REQUIRED: "false"
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Scoped to the hand-written Python rather than the whole tree. Two
+      # findings predate this workflow - an import-order rule and an unused
+      # `noqa` in alembic/env.py, and a code block in backend/README.md that a
+      # newer ruff would reformat - and the phase that added this file was
+      # explicitly told not to touch either. They are reported rather than
+      # papered over; widen these two paths in the same commit that fixes them.
+      - name: Format
+        run: ruff format --check app tests scripts
+
+      - name: Lint
+        run: ruff check app tests scripts
+
+      - name: Types
+        run: mypy
+
+      # Before the tests, and on its own line, because a migration chain that
+      # does not apply is a different failure from a test that does not pass.
+      - name: Database extensions
+        run: psql "$PGURL" -v ON_ERROR_STOP=1 -f ../infrastructure/postgres/init/01-extensions.sql
+        env:
+          PGURL: postgresql://aiops:ci_only_not_a_deployment_password@localhost:5432/aiops_test
+
+      - name: Migrations apply from empty
+        run: alembic upgrade head
+
+      - name: Migration chain is linear
+        # More than one head means two migrations claim the same parent, and
+        # `upgrade head` stops being a defined operation. Cheap to check here,
+        # expensive to discover during a deployment.
+        run: |
+          heads=$(alembic heads | grep -c . || true)
+          echo "alembic heads: $heads"
+          test "$heads" -eq 1
+
+      - name: Tests
+        run: pytest -q
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci` rather than `npm install`: the lock file decides, and a
+        # lock file that does not match package.json fails here rather than
+        # resolving to something nobody chose.
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Types
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        # Also the check that `output: "standalone"` still produces the server
+        # the production image copies.
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.example.test
+
+      - name: The standalone server exists
+        run: test -f .next/standalone/server.js
+
+  images:
+    name: Images and manifests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the production backend image
+        run: >-
+          docker build
+          --target production
+          --tag aiops-backend:ci
+          --file infrastructure/docker/backend/Dockerfile
+          backend
+
+      - name: Build the production frontend image
+        run: >-
+          docker build
+          --target production
+          --build-arg NEXT_PUBLIC_API_URL=https://api.example.test
+          --tag aiops-frontend:ci
+          --file infrastructure/docker/frontend/Dockerfile
+          frontend
+
+      - name: Neither image runs as root
+        # A container that runs as root is one kernel bug away from the host,
+        # and the way that happens is a Dockerfile edit that dropped a USER
+        # line and nobody noticed.
+        run: |
+          for image in aiops-backend:ci aiops-frontend:ci; do
+            user=$(docker image inspect --format '{{.Config.User}}' "$image")
+            echo "$image runs as '${user}'"
+            test -n "$user"
+            test "$user" != "root"
+            test "$user" != "0"
+          done
+
+      - name: The production backend image carries no test tooling
+        # requirements.txt, not requirements-dev.txt. Anything else is a bigger
+        # image with more to audit and nothing more to offer at runtime.
+        run: |
+          if docker run --rm --entrypoint python aiops-backend:ci -c "import pytest" 2>/dev/null; then
+            echo "pytest is installed in the production image"
+            exit 1
+          fi
+          echo "no test tooling present"
+
+      - name: The deployed manifest parses
+        # The template's placeholders satisfy every `${VAR:?}`, so this proves
+        # the file is well-formed and that nothing required is missing from
+        # .env.production.example.
+        run: >-
+          docker compose
+          --env-file .env.production.example
+          --file docker-compose.prod.yml
+          config --quiet
+
+      - name: The development manifest parses
+        run: docker compose --file docker-compose.yml config --quiet
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No environment file is tracked
+        # .env.example and .env.production.example are templates and contain no
+        # value that works anywhere. Anything else named like an environment
+        # file has no business in version control.
+        run: |
+          tracked=$(git ls-files | grep -E '(^|/)\.env' | grep -v '\.example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "tracked environment files:"
+            echo "$tracked"
+            exit 1
+          fi
+          echo "none"
+
+      - name: No credential-shaped literal is tracked
+        # Deliberately narrow: provider key prefixes, PEM blocks and private
+        # key files. A broad entropy scan on a repository this size produces
+        # noise, and a check nobody trusts is a check nobody reads.
+        run: |
+          pattern='(sk-ant-[A-Za-z0-9_-]{16,}|sk-proj-[A-Za-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
+          if git grep -nIE "$pattern" -- . ':(exclude).github/workflows/ci.yml'; then
+            echo "a credential-shaped literal is committed"
+            exit 1
+          fi
+          echo "none"
+          if git ls-files | grep -E '\.(pem|key|p12|pfx)$'; then
+            echo "a key file is committed"
+            exit 1
+          fi
+          echo "no key files"

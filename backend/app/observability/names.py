@@ -1,10 +1,10 @@
-"""The metric vocabulary: every name, every label, every permitted value.
+"""The telemetry vocabulary: every name, every label, every permitted value.
 
-One file, so that "what can end up in a time series?" is a question with a
-readable answer rather than a search. Everything a metric may be labelled with
-is enumerated here and comes from a closed set the application itself defines -
-an enum, a registered tool name, a configured model name, an error code written
-in code.
+One file, so that "what can end up in a time series, or leave this process on a
+span?" is a question with a readable answer rather than a search. Everything
+a metric may be labelled with, and everything a span may carry, is enumerated
+here and comes from a closed set the application itself defines - an enum, a
+registered tool name, a configured model name, an error code written in code.
 
 Two label values are deliberately absent and must stay absent:
 
@@ -144,3 +144,75 @@ def status_class(status_code: int) -> str:
     """``503`` -> ``5xx``. Out-of-range codes fall into ``5xx``."""
     first = status_code // 100
     return f"{first}xx" if 2 <= first <= 5 else "5xx"
+
+
+# -- Span attributes ----------------------------------------------------------
+#
+# A trace carries the same discipline as a metric, for one additional reason: a
+# span leaves this process. Metrics are scraped by an operator of *this*
+# deployment; spans are exported to a collector that may be run by somebody
+# else, may fan out to a vendor, and will certainly be retained for longer than
+# anybody remembers agreeing to.
+#
+# So span attributes are an allow-list, not a deny-list. A key that is not named
+# here is dropped before the span is built, which means the way to leak a prompt
+# into a trace is to add its name to this file - a two-line diff in the one file
+# a reviewer already reads for exactly this question.
+#
+# The same two absences as the metric labels, for the same two reasons, plus a
+# third that only applies to traces: no attribute carries a *value* a user
+# supplied. ``http.route`` is the matched template, ``tool.name`` comes from the
+# registry, ``llm.model`` from deployment configuration. None of them can be
+# introduced by a request body.
+
+SPAN_ATTRIBUTES: frozenset[str] = frozenset(
+    {
+        # Resource - who is reporting. Constant for the lifetime of a process.
+        "service.name",
+        "service.version",
+        "deployment.environment.name",
+        # HTTP server semantics.
+        "http.request.method",
+        "http.route",
+        "http.response.status_code",
+        # What went wrong, in the application's own stable vocabulary - the same
+        # codes the error envelope publishes, never an exception message and
+        # never a traceback.
+        "error.code",
+        "error.layer",
+        # Agent execution. A lifecycle state and two counts; not which agent,
+        # not which run, not what it was asked.
+        "agent.status",
+        "agent.step_count",
+        "agent.tool_call_count",
+        # The model call. The model name comes from deployment configuration
+        # and the counts are integers. Never the prompt, never the response.
+        "llm.model",
+        "llm.input_tokens",
+        "llm.output_tokens",
+        "llm.retries",
+        # Tool execution. The registered name and the outcome - never the
+        # arguments the model chose and never what came back.
+        "tool.name",
+        "tool.outcome",
+        "tool.safety",
+        # Workflow execution. Step *types* and lifecycle states, both closed
+        # sets from the schema; never a step's id, name or payload.
+        "workflow.status",
+        "workflow.step_type",
+        "workflow.step_status",
+        "workflow.step_count",
+        # An approval. Which way it went, not who decided or what they
+        # approved - the action's arguments are the tenant's business record.
+        "approval.decision",
+    }
+)
+"""Every attribute a span may carry. Anything else is dropped, not truncated."""
+
+MAX_ATTRIBUTE_CHARACTERS = 128
+"""Ceiling on one string attribute.
+
+Every permitted attribute is already bounded by construction, so nothing should
+reach this. It is here because "should" is not a mechanism: an over-long value
+is the shape a leak takes, and a span is not the place to find that out.
+"""

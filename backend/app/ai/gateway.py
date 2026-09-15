@@ -46,6 +46,7 @@ from app.ai.providers.base import LLMProvider
 if TYPE_CHECKING:
     from app.core.config import Settings
 from app.observability.instruments import Instruments, NullInstruments
+from app.observability.tracing import span
 
 logger = logging.getLogger(__name__)
 
@@ -240,20 +241,36 @@ class LLMGateway:
         call_id = uuid.uuid4().hex[:16]
         started = perf_counter()
 
-        for attempt in range(1, self._retry.max_attempts + 1):
-            try:
-                result = await call()
-            except LLMError as error:
-                delay = self._delay_before_retry(attempt, error)
-                if delay is None:
-                    self._log_failure(call_id, request, operation, attempt, error, started)
-                    raise
+        # One span for the operation, not one per attempt: a call that
+        # succeeded on the second try is one call that took longer, and
+        # llm.retries is what says so. The requested model goes on it, never
+        # the messages - what was asked is the tenant's conversation, and the
+        # allow-list would drop it anyway.
+        with span(
+            f"llm.{operation}", kind="client", attributes={"llm.model": request.model}
+        ) as current:
+            for attempt in range(1, self._retry.max_attempts + 1):
+                try:
+                    result = await call()
+                except LLMError as error:
+                    delay = self._delay_before_retry(attempt, error)
+                    if delay is None:
+                        self._log_failure(call_id, request, operation, attempt, error, started)
+                        current.set_attributes(
+                            {
+                                "llm.retries": attempt - 1,
+                                "error.code": error.code,
+                                "error.layer": "llm",
+                            }
+                        )
+                        raise
 
-                self._log_retry(call_id, request, operation, attempt, error, delay)
-                await self._sleep(delay)
-            else:
-                self._log_success(call_id, request, operation, attempt, result, started)
-                return result
+                    self._log_retry(call_id, request, operation, attempt, error, delay)
+                    await self._sleep(delay)
+                else:
+                    self._log_success(call_id, request, operation, attempt, result, started)
+                    current.set_attributes(_span_usage(result) | {"llm.retries": attempt - 1})
+                    return result
 
         # Unreachable: the final attempt either returns or raises above. Kept
         # so the function has no implicit None path.
@@ -310,7 +327,7 @@ class LLMGateway:
         result: object,
         started: float,
     ) -> None:
-        response = result.response if isinstance(result, LLMStructuredResponse) else result
+        response = _served_response(result)
         context = self._context(call_id, request, operation, attempt)
         context["outcome"] = "success"
         context["gateway_latency_ms"] = round((perf_counter() - started) * 1000, 2)
@@ -383,3 +400,19 @@ class LLMGateway:
             milliseconds=float(context["gateway_latency_ms"]),
         )
         self._instruments.record_error(error_code=error.code, layer="llm")
+
+
+def _served_response(result: object) -> object:
+    """The provider's response, whether it came back bare or wrapped."""
+    return result.response if isinstance(result, LLMStructuredResponse) else result
+
+
+def _span_usage(result: object) -> dict[str, object]:
+    """Token counts for a span. Two integers, and nothing else from the call."""
+    response = _served_response(result)
+    if not isinstance(response, LLMResponse):
+        return {}
+    return {
+        "llm.input_tokens": response.usage.input_tokens,
+        "llm.output_tokens": response.usage.output_tokens,
+    }

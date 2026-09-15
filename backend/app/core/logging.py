@@ -8,7 +8,9 @@ Two formats are available, chosen by ``LOG_FORMAT``:
     Compact human-readable lines, for local development.
 
 Both attach the current request's correlation id, so every line produced while
-handling a request can be traced back to it. Extra fields passed through
+handling a request can be traced back to it, and the trace id alongside it when
+tracing is enabled - which is what lets a log line and a span be joined without
+either knowing about the other. Extra fields passed through
 ``logger.info("...", extra={"context": {...}})`` are included in the output.
 """
 
@@ -20,7 +22,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from app.core.context import get_request_id
+from app.core.context import get_request_id, get_trace_id
 
 # Attributes present on every LogRecord; anything else was added by the caller.
 # "color_message" is uvicorn's copy of the message with ANSI codes in it, which
@@ -53,11 +55,20 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
 
+        context = _record_context(record)
+
+        # The ambient ids, unless the record carried its own. A span record does
+        # carry its own - it has to stand alone, because a span may be emitted
+        # from somewhere with no request context around it - and printing the
+        # same id twice on one line helps nobody.
         request_id = get_request_id()
-        if request_id:
+        if request_id and "request_id" not in context:
             payload["request_id"] = request_id
 
-        context = _record_context(record)
+        trace_id = get_trace_id()
+        if trace_id and "trace_id" not in context:
+            payload["trace_id"] = trace_id
+
         if context:
             payload["context"] = context
 
@@ -79,11 +90,16 @@ class ConsoleFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
 
+        context = _record_context(record)
+
         suffix: list[str] = []
         request_id = get_request_id()
-        if request_id:
+        if request_id and "request_id" not in context:
             suffix.append(f"request_id={request_id}")
-        suffix.extend(f"{key}={value}" for key, value in _record_context(record).items())
+        trace_id = get_trace_id()
+        if trace_id and "trace_id" not in context:
+            suffix.append(f"trace_id={trace_id}")
+        suffix.extend(f"{key}={value}" for key, value in context.items())
 
         return f"{line} [{' '.join(suffix)}]" if suffix else line
 

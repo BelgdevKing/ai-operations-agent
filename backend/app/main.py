@@ -24,6 +24,7 @@ from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.observability.instruments import Instruments
+from app.observability.tracing import build_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
+    # Reached once the server has stopped accepting connections and the
+    # in-flight requests it was given have finished - uvicorn runs the lifespan
+    # shutdown after that drain, which is what makes closing the pools here
+    # safe. An operator watching a rolling restart sees this line, then
+    # "Shutdown complete"; a gap between them is a connection that would not
+    # close, and that is worth being able to see.
+    logger.info("Shutting down %s", settings.app_name)
+
     await database.dispose_engine()
     await cache.close_redis()
     logger.info("Shutdown complete")
@@ -63,12 +72,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(level=settings.log_level, log_format=settings.log_format)
 
+    # The generated documentation is a complete map of the API: every route,
+    # every field, every error code. That is the right thing to publish while
+    # somebody is building against it and a thing to decide about deliberately
+    # once the deployment is reachable from anywhere, so it is one setting and
+    # the production manifest turns it off. Off means off: no schema either,
+    # because /docs is only a renderer for it.
+    docs_url = "/docs" if settings.docs_enabled else None
+    redoc_url = "/redoc" if settings.docs_enabled else None
+    openapi_url = f"{settings.api_v1_prefix}/openapi.json" if settings.docs_enabled else None
+
     app = FastAPI(
         title=settings.app_name,
         version=__version__,
         description="Multi-tenant AI operations agent platform.",
         lifespan=lifespan,
-        openapi_url=f"{settings.api_v1_prefix}/openapi.json",
+        docs_url=docs_url,
+        redoc_url=redoc_url,
+        openapi_url=openapi_url,
     )
     # Note: Starlette's debug flag is deliberately NOT wired to settings.debug.
     # In debug mode Starlette answers unhandled exceptions with a raw traceback
@@ -81,6 +102,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # "this counter incremented exactly once" stays a statement a test can make.
     app.state.instruments = Instruments()
 
+    # Per application for the same reason, and off unless a deployment asked
+    # for it. The resource attributes are the only thing every span carries;
+    # all three are deployment configuration, none of them is a tenant.
+    app.state.tracer = build_tracer(
+        enabled=settings.tracing_enabled,
+        ratio=settings.tracing_sample_ratio,
+        resource={
+            "service.name": settings.app_name,
+            "service.version": __version__,
+            "deployment.environment.name": settings.app_env,
+        },
+    )
+
     # Starlette applies the LAST middleware added as the outermost layer, so
     # RequestContextMiddleware goes on after CORS: every request then gets a
     # correlation id, including CORS preflights and anything CORS rejects.
@@ -91,7 +125,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RequestContextMiddleware, instruments=app.state.instruments)
+    app.add_middleware(
+        RequestContextMiddleware,
+        instruments=app.state.instruments,
+        tracer=app.state.tracer,
+    )
 
     register_exception_handlers(app)
 
@@ -101,14 +139,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", tags=["meta"], summary="Service metadata")
     async def root() -> dict[str, str]:
-        return {
+        metadata = {
             "service": settings.app_name,
             "version": __version__,
             "environment": settings.app_env,
-            "docs": "/docs",
             "health": "/health",
             "api": settings.api_v1_prefix,
         }
+        # Advertised only when it is actually there. A pointer to a 404 is
+        # worse than no pointer: it sends somebody looking for a proxy problem.
+        if docs_url:
+            metadata["docs"] = docs_url
+        return metadata
 
     return app
 

@@ -4,12 +4,24 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
-from app.core.context import get_request_id, reset_request_id, set_request_id
+from app.core.config import Settings
+from app.core.context import (
+    get_request_id,
+    get_trace_id,
+    reset_request_id,
+    reset_trace_id,
+    set_request_id,
+    set_trace_id,
+)
 from app.core.logging import ConsoleFormatter, JsonFormatter, configure_logging
 from app.core.middleware import REQUEST_ID_HEADER
+from app.main import create_app
+from app.observability.tracing import TRACEPARENT_HEADER
 
 
 def _record(message: str = "hello") -> logging.LogRecord:
@@ -157,3 +169,199 @@ async def test_an_upstream_request_id_is_preserved(client: AsyncClient) -> None:
     response = await client.get("/health", headers={REQUEST_ID_HEADER: "upstream-id"})
 
     assert response.headers[REQUEST_ID_HEADER] == "upstream-id"
+
+
+# -- Tracing in the request path ----------------------------------------------
+#
+# The middleware's own contribution: a trace id bound to the context, a span
+# named from the route template, and - while tracing is off - none of it.
+
+
+def traced_client(settings: Settings, **overrides: object) -> AsyncClient:
+    app = create_app(settings.model_copy(update={"tracing_enabled": True, **overrides}))
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
+
+
+@contextmanager
+def captured_spans() -> Iterator[list[logging.LogRecord]]:
+    """Collect the span records, without relying on the root handler.
+
+    ``caplog`` attaches its handler to the root logger, and ``create_app``
+    calls ``configure_logging``, which replaces the root handlers - so a test
+    that builds an application loses caplog. Attaching to the tracing logger
+    itself is unaffected by that, and is what these tests are asking about.
+    """
+    records: list[logging.LogRecord] = []
+
+    class Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    logger = logging.getLogger("app.observability.tracing")
+    handler = Collector(level=logging.INFO)
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+
+
+def test_trace_id_defaults_to_none() -> None:
+    assert get_trace_id() is None
+
+
+def test_trace_id_can_be_set_and_restored() -> None:
+    token = set_trace_id("0af7651916cd43dd8448eb211c80319c")
+    assert get_trace_id() == "0af7651916cd43dd8448eb211c80319c"
+
+    reset_trace_id(token)
+    assert get_trace_id() is None
+
+
+def test_json_formatter_includes_the_trace_id() -> None:
+    """What joins a log line to a span without either knowing about the other."""
+    token = set_trace_id("0af7651916cd43dd8448eb211c80319c")
+    try:
+        payload = json.loads(JsonFormatter().format(_record()))
+    finally:
+        reset_trace_id(token)
+
+    assert payload["trace_id"] == "0af7651916cd43dd8448eb211c80319c"
+
+
+def test_json_formatter_omits_the_trace_id_when_tracing_is_off() -> None:
+    """The one that matters for "off means off": a deployment that has not
+    enabled tracing produces the log records it produced before it existed."""
+    assert "trace_id" not in json.loads(JsonFormatter().format(_record()))
+
+
+def test_console_formatter_appends_the_trace_id() -> None:
+    token = set_trace_id("0af7651916cd43dd8448eb211c80319c")
+    try:
+        line = ConsoleFormatter().format(_record())
+    finally:
+        reset_trace_id(token)
+
+    assert "trace_id=0af7651916cd43dd8448eb211c80319c" in line
+
+
+async def test_a_request_is_not_traced_unless_tracing_is_enabled(
+    settings: Settings, client: AsyncClient
+) -> None:
+    with captured_spans() as spans:
+        await client.get("/api/v1/nothing-here")
+
+    assert settings.tracing_enabled is False
+    assert spans == []
+
+
+async def test_an_enabled_request_records_one_span(
+    settings: Settings,
+) -> None:
+    async with traced_client(settings) as client:
+        with captured_spans() as spans:
+            await client.get("/health")
+
+    assert len(spans) == 1
+    context = spans[0].context
+    assert context["span_name"] == "GET /health"
+    assert context["span_kind"] == "server"
+    assert context["http.response.status_code"] == 200
+    assert context["span_status"] == "ok"
+
+
+async def test_a_span_is_named_by_the_route_template_not_the_path(
+    settings: Settings,
+) -> None:
+    """The same rule as the metric label. A path carries ids; a template does
+    not, and one span name per run is how a trace store falls over.
+
+    The template is the one Starlette puts in the scope, which is the route's
+    path *within the router it was declared in* - ``/runs/{run_id}`` rather
+    than ``/api/v1/ai/runs/{run_id}``. That is the same value the Part 19
+    metric label has carried since it was written, and it is asserted here as
+    it is rather than as one might wish it: the property this test exists for
+    is that no identifier from the request reaches the name, and that holds.
+    """
+    run_id = "11111111-1111-1111-1111-111111111111"
+
+    async with traced_client(settings) as client:
+        with captured_spans() as spans:
+            await client.get(f"/api/v1/ai/runs/{run_id}")
+
+    context = spans[0].context
+    assert context["span_name"] == "GET /runs/{run_id}"
+    assert context["http.route"] == "/runs/{run_id}"
+    assert run_id not in str(context)
+
+
+async def test_an_unmatched_path_never_becomes_a_span_name(
+    settings: Settings,
+) -> None:
+    """A 404's path is whatever somebody typed, which is user input."""
+    async with traced_client(settings) as client:
+        with captured_spans() as spans:
+            await client.get("/definitely/not/a/route/secret-looking-value")
+
+    context = spans[0].context
+    assert context["span_name"] == "GET unmatched"
+    assert "secret-looking-value" not in str(context)
+
+
+async def test_an_upstream_trace_is_continued(
+    settings: Settings,
+) -> None:
+    upstream = "4bf92f3577b34da6a3ce929d0e0e4736"
+    parent = "00f067aa0ba902b7"
+
+    async with traced_client(settings) as client:
+        with captured_spans() as spans:
+            await client.get("/health", headers={TRACEPARENT_HEADER: f"00-{upstream}-{parent}-01"})
+
+    context = spans[0].context
+    assert context["trace_id"] == upstream
+    assert context["parent_span_id"] == parent
+    assert context["span_id"] != parent
+
+
+async def test_a_forged_traceparent_starts_a_fresh_trace_instead_of_failing(
+    settings: Settings,
+) -> None:
+    """The header is the one piece of trace data a client controls, so it is
+    validated as input. A broken one costs the caller nothing."""
+    async with traced_client(settings) as client:
+        with captured_spans() as spans:
+            response = await client.get(
+                "/health", headers={TRACEPARENT_HEADER: "00-<script>-nope-!!"}
+            )
+
+    assert response.status_code == 200
+    context = spans[0].context
+    assert len(context["trace_id"]) == 32
+    assert context["parent_span_id"] is None
+    assert "<script>" not in str(context)
+
+
+async def test_a_traced_request_still_carries_its_correlation_id(
+    settings: Settings,
+) -> None:
+    """Two ids, both present: the trace id is for a trace store, the
+    correlation id is what a person quotes in a bug report."""
+    async with traced_client(settings) as client:
+        response = await client.get("/health")
+
+    assert response.headers[REQUEST_ID_HEADER]
+
+
+async def test_a_sample_ratio_of_zero_records_nothing(
+    settings: Settings,
+) -> None:
+    async with traced_client(settings, tracing_sample_ratio=0.0) as client:
+        with captured_spans() as spans:
+            response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert spans == []

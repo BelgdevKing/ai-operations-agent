@@ -1,0 +1,276 @@
+# =============================================================================
+# AI Operations Agent Platform - deployed stack
+#
+# The reference production environment. docker-compose.yml is development and
+# this file is not an overlay on it: it is a separate, self-contained stack, so
+# reading it tells you what a deployment runs without having to hold two files
+# in your head and work out which values survived.
+#
+#   cp .env.production.example .env.production   # then fill it in
+#   docker compose --env-file .env.production -f docker-compose.prod.yml build
+#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+#
+# Full instructions, including the migration step, the reverse proxy and what
+# to do about backups, are in docs/deployment.md.
+#
+# -- WHAT IS DIFFERENT HERE ----------------------------------------------------
+#
+# * No source is mounted. Both images contain the code they will run.
+# * No development defaults. Every secret below is written `${VAR:?...}`, so
+#   Compose refuses to start the stack - with a message naming the variable -
+#   rather than falling back to something that is published in this repository.
+# * PostgreSQL and Redis are not published to the host. They are reachable on
+#   the internal network and nowhere else.
+# * The backend is published to the loopback interface only. A reverse proxy
+#   terminates TLS in front of it; see docs/deployment.md.
+# * Migrations are their own one-shot service that must exit successfully
+#   before the backend starts. They are not run by the application.
+#
+# -- NO SECRET IS WRITTEN IN THIS FILE -----------------------------------------
+#
+# Every value below is either a literal setting or a reference to the
+# environment. `.env.production` holds the real values, is git-ignored, and is
+# never copied into an image.
+# =============================================================================
+
+name: ai-operations-agent-prod
+
+# Anchors, so the backend and the migration job cannot drift apart. They run
+# the same image, against the same database, with the same configuration - the
+# difference is the command.
+x-backend-environment: &backend-environment
+  APP_NAME: ${APP_NAME:-AI Operations Agent Platform}
+  APP_ENV: ${APP_ENV:-production}
+  DEBUG: "false"
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Machine-readable, because in a deployment something else is reading it.
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
+
+  # The map of every route, field and error code. Off by default here; turn it
+  # on deliberately if the API is meant to be self-documenting to its callers.
+  DOCS_ENABLED: ${DOCS_ENABLED:-false}
+
+  # Exact origins. A deployed environment refuses `*`, because the API sends
+  # credentials and a wildcard with credentials means every site on the
+  # internet may call this API as whoever is signed in.
+  CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to the exact frontend origin}
+
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL, including a real password}
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+  DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
+
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  REDIS_REQUIRED: ${REDIS_REQUIRED:-true}
+
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY to a long random value}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+
+  # Only the selected provider's key is required, and the application refuses
+  # to start in production without it.
+  LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.5}
+  LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+  LLM_RETRY_MAX_DELAY_SECONDS: ${LLM_RETRY_MAX_DELAY_SECONDS:-8}
+  LLM_ALLOWED_MODELS: ${LLM_ALLOWED_MODELS:-}
+
+  # Observability. /metrics is off unless a scraper exists, and there is no
+  # unauthenticated mode - the application refuses to start if it is enabled
+  # without a token.
+  METRICS_ENABLED: ${METRICS_ENABLED:-false}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  LLM_PRICING: ${LLM_PRICING:-}
+
+  # Tracing is off unless a deployment turns it on, and records to the log when
+  # it is. See docs/deployment.md for what a span may carry and what it may not.
+  TRACING_ENABLED: ${TRACING_ENABLED:-false}
+  TRACING_SAMPLE_RATIO: ${TRACING_SAMPLE_RATIO:-1.0}
+
+x-logging: &logging
+  # Bounded, so a chatty week cannot fill the disk the database is on.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL
+  #
+  # Included so the stack stands up on one host. A managed database is the
+  # better answer where one is available: delete this service, point
+  # DATABASE_URL at it, and drop the depends_on entries below.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-aiops}
+      # Checksums catch silent corruption at read time rather than at restore
+      # time. They cost a few percent and can only be turned on at initdb.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    # Deliberately no `ports`. The database is reachable on the internal
+    # network by the backend and the migration job, and by nothing else.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs once, on first creation of the volume only.
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-aiops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # A database gets time to finish what it is doing. The default 10 seconds
+    # is how a checkpoint becomes a recovery.
+    stop_grace_period: 60s
+    logging: *logging
+    networks: [aiops]
+
+  # ---------------------------------------------------------------------------
+  # Redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      # Refuse writes rather than evict: nothing here is a disposable cache
+      # yet, and silently dropping data is the worse failure.
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    stop_grace_period: 30s
+    logging: *logging
+    networks: [aiops]
+
+  # ---------------------------------------------------------------------------
+  # Migrations - one shot, before the application
+  #
+  # The same image and the same Alembic configuration developers use. There is
+  # no second migration mechanism and the application does not migrate on
+  # start-up: N application containers starting at once would be N concurrent
+  # `alembic upgrade head` runs against one database.
+  #
+  # `upgrade head` only. Downgrades are deliberately not automated - see
+  # docs/deployment.md for how a bad migration is rolled back.
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/backend/Dockerfile
+      target: production
+    image: ${BACKEND_IMAGE:-aiops-backend:prod}
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    logging: *logging
+    networks: [aiops]
+
+  # ---------------------------------------------------------------------------
+  # Backend
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/backend/Dockerfile
+      target: production
+    image: ${BACKEND_IMAGE:-aiops-backend:prod}
+    restart: unless-stopped
+    environment:
+      <<: *backend-environment
+      # One uvicorn worker per container. The metrics registry lives in the
+      # process, so a scrape of a four-worker container reports whichever
+      # worker happened to answer. Scale by running more containers, each
+      # scraped in its own right - docs/deployment.md, "Workers and metrics".
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
+      # Which upstreams may set X-Forwarded-*. Defaults to the Docker bridge
+      # network, so the reverse proxy in front is trusted and a request that
+      # reached the container some other way is not.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.16.0.0/12}
+    ports:
+      # Loopback only. TLS terminates at a reverse proxy on this host; nothing
+      # here should be reachable from another machine directly.
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # Longer than uvicorn's --timeout-graceful-shutdown, so the server gets to
+    # finish the drain it started rather than being killed in the middle of it.
+    stop_grace_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKEND_MEMORY_LIMIT:-1g}
+    logging: *logging
+    networks: [aiops]
+
+  # ---------------------------------------------------------------------------
+  # Frontend
+  #
+  # NEXT_PUBLIC_* is compiled into the browser bundle, so the API address is a
+  # BUILD argument, not an environment variable. Changing it means rebuilding
+  # this image. Nothing secret may be passed here - see the Dockerfile.
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../infrastructure/docker/frontend/Dockerfile
+      target: production
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?set NEXT_PUBLIC_API_URL to the browser-visible API address}
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-AI Operations Agent Platform}
+    image: ${FRONTEND_IMAGE:-aiops-frontend:prod}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: ${FRONTEND_MEMORY_LIMIT:-512m}
+    logging: *logging
+    networks: [aiops]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  aiops:
+    driver: bridge

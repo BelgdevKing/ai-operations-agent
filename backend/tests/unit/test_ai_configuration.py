@@ -44,8 +44,22 @@ def settings(**overrides: Any) -> Settings:
 
 
 def deployed(environment: str, **overrides: Any) -> Settings:
-    """Settings for a deployed environment, which also needs a JWT secret."""
-    return Settings(app_env=environment, jwt_secret_key="j" * 48, **overrides)  # type: ignore[arg-type]
+    """Settings a deployed environment would actually accept.
+
+    Everything a deployment must not be caught with is set here rather than in
+    each test: the development JWT secret, the published development database
+    password and DEBUG are each refused on their own, and each has its own test
+    in tests/unit/test_security.py and tests/unit/test_config.py. This helper
+    exists so that a test about provider credentials is only about provider
+    credentials.
+    """
+    return Settings(  # type: ignore[arg-type]
+        app_env=environment,
+        jwt_secret_key="j" * 48,
+        database_url="postgresql+asyncpg://aiops:not-the-default@db:5432/aiops",
+        debug=False,
+        **overrides,
+    )
 
 
 # -- Defaults -----------------------------------------------------------------

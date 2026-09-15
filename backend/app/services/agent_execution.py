@@ -54,6 +54,7 @@ from app.models.approval import Approval
 from app.models.enums import ApprovalStatus, MessageRole
 from app.models.organization import OrganizationMember
 from app.observability.instruments import Instruments, NullInstruments
+from app.observability.tracing import Span, span
 from app.repositories.agent_run import AgentRunRepository, ToolExecutionRepository
 from app.repositories.approval import ApprovalRepository
 from app.repositories.conversation import ConversationRepository
@@ -491,14 +492,36 @@ class AgentExecutionService:
         The exception is re-raised: the API layer needs it to choose a status
         code. The audit row is written first, because a failed run that left no
         trace is the case an audit trail exists for.
-        """
-        try:
-            await call()
-        except (AgentCancelledError, AgentError, LLMError):
-            await self._audit_outcome(run)
-            raise
 
-        await self._audit_outcome(run)
+        The span wrapping it is what the model calls and the tool calls below
+        become children of, so a trace shows where one request's time actually
+        went. It carries the run's *state* and two counts - never the run's id,
+        the agent's id, the conversation or anything the agent was asked.
+        """
+        with span("agent.run") as current:
+            try:
+                await call()
+            except (AgentCancelledError, AgentError, LLMError):
+                await self._audit_outcome(run)
+                self._describe(current, run)
+                raise
+
+            await self._audit_outcome(run)
+            self._describe(current, run)
+
+    @staticmethod
+    def _describe(current: Span, run: AgentRun) -> None:
+        """Put the run's outcome on the span, from the same values the metric used."""
+        current.set_attributes(
+            {
+                "agent.status": run.status.value,
+                "agent.step_count": run.step_count,
+                "agent.tool_call_count": len(run.tool_calls),
+            }
+        )
+        if run.error_code:
+            current.set_attributes({"error.code": run.error_code, "error.layer": "agent"})
+            current.set_status("error")
 
     async def _audit_outcome(self, run: AgentRun) -> None:
         await record_agent_run(self._session, run)

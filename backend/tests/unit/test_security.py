@@ -311,6 +311,8 @@ def test_a_real_secret_is_accepted_in_production() -> None:
     settings = Settings(
         app_env="production",
         jwt_secret_key="x" * 48,
+        database_url="postgresql+asyncpg://aiops:real@db:5432/aiops",
+        debug=False,
         anthropic_api_key="test-anthropic-secret",
     )
 

@@ -45,6 +45,7 @@ from app.models.enums import ApprovalStatus, RunStatus, WorkflowStatus
 from app.models.organization import OrganizationMember
 from app.models.workflow import Workflow, WorkflowRun, WorkflowStepRun
 from app.observability.instruments import Instruments, NullInstruments
+from app.observability.tracing import Span, span
 from app.repositories.approval import ApprovalRepository
 from app.repositories.workflow import (
     WorkflowRepository,
@@ -267,10 +268,12 @@ class WorkflowService:
         await record_workflow_run_created(self._session, run)
         await self._session.commit()
 
-        engine = self._engine(request_id)
-        await engine.start(run, definition)
+        with span("workflow.run") as current:
+            engine = self._engine(request_id)
+            await engine.start(run, definition)
 
-        await self._audit_outcome(run)
+            await self._audit_outcome(run)
+            _describe(current, run)
         return await self._view(run)
 
     # -- Resuming after a decision --------------------------------------------
@@ -306,10 +309,12 @@ class WorkflowService:
         # the whole point of recording the version.
         definition = self._parse(workflow.definition)
 
-        engine = self._engine(run.request_id)
-        await engine.resume(run, definition, step_run, approved=approved)
+        with span("workflow.run") as current:
+            engine = self._engine(run.request_id)
+            await engine.resume(run, definition, step_run, approved=approved)
 
-        await self._audit_outcome(run)
+            await self._audit_outcome(run)
+            _describe(current, run)
         return await self._view(run)
 
     async def cancel_run(self, run_id: uuid.UUID) -> WorkflowRunView:
@@ -551,3 +556,19 @@ def _elapsed_ms(run: WorkflowRun) -> float:
         return 0.0
     end = run.completed_at or datetime.now(UTC)
     return max((end - run.started_at).total_seconds() * 1000.0, 0.0)
+
+
+def _describe(current: Span, run: WorkflowRun) -> None:
+    """Put a workflow run's outcome on the span.
+
+    A lifecycle state and a count, from the same values the metric used. Never
+    the run's id, the workflow's id, the definition or the input - a workflow
+    document and its payload are the tenant's, and the allow-list would drop
+    them if this tried.
+    """
+    current.set_attributes(
+        {"workflow.status": run.status.value, "workflow.step_count": run.step_count}
+    )
+    if run.error_code:
+        current.set_attributes({"error.code": run.error_code, "error.layer": "workflow"})
+        current.set_status("error")
