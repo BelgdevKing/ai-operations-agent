@@ -4,6 +4,15 @@ Used later for caching, rate limiting and the background job queue. For now it
 backs the readiness check only, so it is optional in native development - see
 ``Settings.redis_required``. Connections are lazy: nothing here touches the
 network at import or at startup, so the application boots with Redis absent.
+
+**Both timeouts are set explicitly**, because the client library defaults them
+to ``None`` - meaning no timeout at all. That default is survivable where a
+host refuses a connection, since the refusal is immediate; it is not survivable
+where the path drops packets instead, because then the wait is the operating
+system's TCP timeout. The only caller today is the readiness probe, and a
+readiness probe that hangs is worse than one that fails: an instance whose
+readiness never answers is never taken out of rotation, so traffic keeps
+arriving at something that cannot serve it.
 """
 
 from __future__ import annotations
@@ -24,7 +33,15 @@ def get_redis() -> Redis:
     """Return the shared Redis client, creating it on first use."""
     global _client
     if _client is None:
-        _client = Redis.from_url(_settings.redis_url, decode_responses=True)
+        _client = Redis.from_url(
+            _settings.redis_url,
+            decode_responses=True,
+            # One bounds reaching Redis, the other bounds waiting for it to
+            # answer. Both are needed: a host can accept a connection and then
+            # never reply, which the connect timeout alone does not cover.
+            socket_connect_timeout=_settings.redis_timeout_seconds,
+            socket_timeout=_settings.redis_timeout_seconds,
+        )
     return _client
 
 

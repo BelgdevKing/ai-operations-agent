@@ -59,9 +59,19 @@ x-backend-environment: &backend-environment
   DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL, including a real password}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
   DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
+  # How long the driver waits to reach PostgreSQL, and how long one statement
+  # may run. Neither is the pool timeout above, which only limits waiting for
+  # an existing connection and does nothing when the server is unreachable.
+  # Migrations are unaffected: Alembic builds its own engine.
+  DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-10}
+  DATABASE_COMMAND_TIMEOUT_SECONDS: ${DATABASE_COMMAND_TIMEOUT_SECONDS:-30}
 
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
   REDIS_REQUIRED: ${REDIS_REQUIRED:-true}
+  # Short, because the only caller is the readiness probe. A probe that waits
+  # is worse than one that fails: an instance whose readiness never answers is
+  # never taken out of rotation.
+  REDIS_TIMEOUT_SECONDS: ${REDIS_TIMEOUT_SECONDS:-2}
 
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY to a long random value}
   JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}

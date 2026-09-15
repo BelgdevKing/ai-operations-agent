@@ -7,6 +7,10 @@
  * did. It deliberately does not for 5xx - those carry a generic message and the
  * detail stays in the server log - so this substitutes its own text there
  * rather than echoing whatever arrived.
+ *
+ * Three 5xx statuses get their own words, because the advice genuinely differs:
+ * 502 and 504 are the model provider, and 503 is a dependency this service
+ * needs. All three are temporary and worth retrying; a plain 500 is not.
  */
 
 import { ApiError, NetworkError } from "./errors";
@@ -176,6 +180,22 @@ export function describeError(error: unknown): ErrorPresentation {
       title: "The model took too long",
       message:
         "The AI provider did not respond in time. Try again, or send a shorter message.",
+      tone: "warn",
+      requestId,
+      fieldErrors: {},
+    };
+  }
+
+  // A dependency the server needs is down - the database, most often. Its own
+  // case rather than the generic 5xx below, because the advice genuinely
+  // differs: this one is temporary and the same request works once the
+  // dependency is back, so "try again shortly" is accurate rather than
+  // hopeful. The backend answers it deliberately, as `service_unavailable`,
+  // instead of letting an outage look like a bug.
+  if (error.status === 503) {
+    return {
+      title: "The service is temporarily unavailable",
+      message: "Something the server depends on is not responding. Try again shortly.",
       tone: "warn",
       requestId,
       fieldErrors: {},

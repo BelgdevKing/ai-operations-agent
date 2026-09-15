@@ -119,6 +119,13 @@ jobs:
       - name: Migrations apply from empty
         run: alembic upgrade head
 
+      - name: Models and schema agree
+        # `alembic check` autogenerates against the live schema and reports any
+        # difference. A model changed without a migration is the defect it
+        # catches, and the symptom otherwise is a query failing in production
+        # against a column that only exists in Python.
+        run: alembic check
+
       - name: Migration chain is linear
         # More than one head means two migrations claim the same parent, and
         # `upgrade head` stops being a defined operation. Cheap to check here,

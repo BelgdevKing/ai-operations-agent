@@ -110,3 +110,39 @@ test("other statuses read the same on the sign-in form as anywhere else", () => 
   const conflict = apiError(409, "conflict", "Email already registered.");
   assert.deepEqual(describeSignInError(conflict), describeError(conflict));
 });
+
+// -- A dependency outage reads as temporary -----------------------------------
+
+test("503 says the outage is temporary rather than that the app is broken", () => {
+  // Reachable for any endpoint since Part 22: the backend answers
+  // `service_unavailable` when it cannot reach PostgreSQL, instead of letting
+  // an outage arrive as the same 500 a null dereference produces.
+  const { title, message, tone } = describeError(
+    apiError(503, "service_unavailable", "A required dependency is unavailable."),
+  );
+
+  assert.match(title, /temporarily unavailable/);
+  assert.match(message, /try again shortly/i);
+  // Warn, not danger: nothing the person did is wrong and nothing is lost.
+  assert.equal(tone, "warn");
+});
+
+test("503 does not read like the generic server failure", () => {
+  const dependency = describeError(apiError(503, "service_unavailable", "A required dependency is unavailable."));
+  const bug = describeError(apiError(500, "internal_error", "An unexpected error occurred."));
+
+  assert.notEqual(dependency.title, bug.title);
+  assert.notEqual(dependency.tone, bug.tone);
+});
+
+test("no 5xx echoes the server's own message", () => {
+  // The rule the whole 5xx branch exists for: server-side detail stays in the
+  // server log, and the request id is what ties this screen to it.
+  const secret = "psycopg: FATAL password authentication failed for user aiops";
+
+  for (const status of [500, 502, 503, 504]) {
+    const shown = describeError(apiError(status, "some_code", secret));
+    assert.ok(!shown.message.includes(secret), `${status} echoed the server message`);
+    assert.equal(shown.requestId, "req-1");
+  }
+});

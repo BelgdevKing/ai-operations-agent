@@ -283,6 +283,91 @@ deployment does not cancel somebody's pending decision.
 
 ---
 
+## When a dependency fails
+
+Every external wait this process makes has a ceiling somebody chose, and every
+ceiling is bounded at both ends so a deployment can be stricter than the default
+but never more permissive than the limit.
+
+| Wait | Setting | Default | Limit |
+| --- | --- | --- | --- |
+| Model call | `LLM_TIMEOUT_SECONDS` | 60s | 300s |
+| Tool execution | `TOOL_TIMEOUT_SECONDS` | 15s | 300s |
+| Reaching PostgreSQL | `DATABASE_CONNECT_TIMEOUT_SECONDS` | 10s | 1–120s |
+| One SQL statement | `DATABASE_COMMAND_TIMEOUT_SECONDS` | 30s | 1–120s |
+| A free pooled connection | `DATABASE_POOL_TIMEOUT` | 30s | ≥1s |
+| Redis connect and command | `REDIS_TIMEOUT_SECONDS` | 2s | 0.1–30s |
+
+The two database timeouts are not the pool timeout. `DATABASE_POOL_TIMEOUT`
+limits how long a caller waits for an *existing* connection to come free, which
+does nothing at all when the server is unreachable. Without the other two the
+limit is the operating system's, which on a network path that drops packets
+rather than refusing them is minutes — long enough for the readiness probe to
+hang rather than report unready, and an instance whose readiness never answers
+is never taken out of rotation.
+
+**Migrations are deliberately exempt.** Alembic builds its own engine in
+`alembic/env.py`, so a schema change on a large table cannot be cut off by the
+command timeout.
+
+### What a client sees
+
+| Situation | Status | Code |
+| --- | --- | --- |
+| PostgreSQL unreachable, or a statement timed out | `503` | `service_unavailable` |
+| Model provider rate-limited us | `429` | `llm_rate_limited` |
+| Model provider did not answer in time | `504` | `llm_timeout` |
+| Model provider returned an error | `502` | `llm_provider_error` |
+| Anything genuinely unexpected | `500` | `internal_error` |
+
+`503` and `500` are different operational events and are reported differently on
+purpose. One says "try again shortly"; the other says "this service has a bug".
+Before this distinction existed, a database outage answered `500 internal_error`
+— the same response a null dereference produces — so a client could not tell
+them apart and neither could whoever was paged.
+
+The `503` body is the generic `A required dependency is unavailable.` with the
+correlation id. No statement, no driver message, no host and no credential
+reaches the client; the real cause is chained into the server log.
+
+### What retries, and what does not
+
+The **model gateway is the only thing in this platform that retries**, and it
+retries only transport-class failures — a rate limit, a timeout, a dropped
+connection. The provider SDKs are constructed with their own retries disabled,
+so the worst case is exactly `LLM_MAX_RETRIES + 1` calls.
+
+Nothing retries a **tool execution, an approval decision, a cancellation, a
+workflow transition or a business mutation**, and nothing should: each of those
+has a side effect, and repeating one is how a shipment gets cancelled twice. A
+model call is safe to repeat because it has no side effect of its own — the
+agent decides what to do *after* the model answers, and the tool execution that
+follows is separately claimed by conditional update.
+
+A request that fails against an unavailable database is rolled back before the
+`503` is raised, so it leaves nothing durable behind and the caller's
+`Idempotency-Key` is still free for the retry.
+
+### Configuration failures
+
+The process refuses to start on a configuration that would be unsafe or
+unworkable, and the message names the setting and what it should look like:
+
+```
+1 configuration problem:
+  DATABASE_URL: DATABASE_URL must start with 'postgresql+asyncpg://'.
+                The value is not shown because it contains the password.
+```
+
+**The value that was rejected is never printed.** The library's own error
+rendering appends the input it refused — for a whole-model check that is the
+entire settings dictionary, API key included — so the message is rebuilt from
+the setting name and the validator's own sentence, and the original exception is
+suppressed rather than chained. A startup error is the first thing in a log and
+the thing people paste into a chat window when asking for help.
+
+---
+
 ## Maintenance jobs
 
 **There is no background worker.** That is a design decision and it has one
@@ -561,6 +646,9 @@ for a script to read.
 | `/docs` returns 404 | `DOCS_ENABLED` is false, which is the default here. |
 | Runs stuck `running` after a restart | Expected: there is no background worker. The abandonment sweep fails them after `AGENT_RUN_STALE_AFTER_SECONDS`. |
 | Cost shows as unknown | `LLM_PRICING` is empty, or has no entry for that model. Usage is still reported in full. |
+| API calls return 503 `service_unavailable` | A dependency is down, almost always PostgreSQL. `docker compose ps`, then `/health/ready` for which one. Not an application fault. |
+| A long usage report is cut off | `DATABASE_COMMAND_TIMEOUT_SECONDS` fired. Raise it, up to 120s. |
+| The process exits at start-up naming a setting | A configuration refusal. The message says which setting and what it expects; the value is deliberately not shown. |
 
 Correlating one report with the logs: the client's `X-Request-ID` is the
 `request_id` on every line the request produced.

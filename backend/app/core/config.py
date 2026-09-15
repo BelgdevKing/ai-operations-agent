@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import cached_property, lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.observability.pricing import PriceBook
@@ -41,6 +41,27 @@ MAX_AGENT_OUTPUT_TOKENS = 8_192
 
 # A tool may not be given an unbounded deadline by configuration either.
 MAX_TOOL_TIMEOUT_SECONDS = 300.0
+
+# Nor may a model call, nor a database one. Every external operation this
+# process waits on has a ceiling it cannot be configured past, because the
+# failure mode of an unbounded timeout is not an error - it is a worker holding
+# a connection and a request slot until somebody notices.
+#
+# The floors matter as much as the ceilings. A one-second database timeout
+# would "work" on an idle laptop and fail the first time a usage report ran
+# over a real dataset, which is the kind of setting that only breaks in
+# production.
+MAX_LLM_TIMEOUT_SECONDS = 300.0
+MIN_DATABASE_TIMEOUT_SECONDS = 1.0
+MAX_DATABASE_TIMEOUT_SECONDS = 120.0
+MIN_REDIS_TIMEOUT_SECONDS = 0.1
+MAX_REDIS_TIMEOUT_SECONDS = 30.0
+
+# Drivers this application knows how to talk to. Checked at start-up rather
+# than at first use: a typo in a scheme is a deployment that looks healthy
+# until the first request, and by then it is a 500 rather than a boot failure.
+DATABASE_URL_PREFIX = "postgresql+asyncpg://"
+REDIS_URL_SCHEMES = ("redis://", "rediss://", "unix://")
 
 # How long an unfinished agent run may sit untouched before the abandonment
 # sweep gives up on it. A ceiling rather than a preference: a deployment that
@@ -137,6 +158,27 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=5, ge=1)
     database_max_overflow: int = Field(default=10, ge=0)
     database_pool_timeout: int = Field(default=30, ge=1)
+    database_connect_timeout_seconds: float = Field(
+        default=10.0,
+        ge=MIN_DATABASE_TIMEOUT_SECONDS,
+        le=MAX_DATABASE_TIMEOUT_SECONDS,
+        description="How long opening a new connection may take. Distinct from "
+        "database_pool_timeout, which bounds waiting for an *existing* pooled "
+        "connection and does nothing when the server is unreachable. Without "
+        "this the wait is the operating system's TCP timeout, which is minutes "
+        "on a path that drops packets rather than refusing them - long enough "
+        "for a readiness probe to hang instead of reporting unready.",
+    )
+    database_command_timeout_seconds: float = Field(
+        default=30.0,
+        ge=MIN_DATABASE_TIMEOUT_SECONDS,
+        le=MAX_DATABASE_TIMEOUT_SECONDS,
+        description="How long one statement may take before the driver gives "
+        "up on it. A server that accepted the connection and then stopped "
+        "answering is the case this exists for: nothing else in the stack ends "
+        "that wait. Migrations are unaffected - Alembic builds its own engine, "
+        "so a long schema change cannot be cut off by this.",
+    )
 
     # -- Redis ---------------------------------------------------------------
     # Redis is not used by any implemented feature yet, so native development
@@ -145,6 +187,17 @@ class Settings(BaseSettings):
     # does not make the service unready.
     redis_url: str = "redis://localhost:6379/0"
     redis_required: bool = False
+    redis_timeout_seconds: float = Field(
+        default=2.0,
+        ge=MIN_REDIS_TIMEOUT_SECONDS,
+        le=MAX_REDIS_TIMEOUT_SECONDS,
+        description="Ceiling on connecting to Redis and on one command. Short, "
+        "because the only thing Redis is used for today is the readiness "
+        "check, and a probe that waits is worse than a probe that fails: an "
+        "instance whose readiness never answers is never taken out of "
+        "rotation. The client library defaults both of these to no timeout at "
+        "all.",
+    )
 
     # -- Authentication ------------------------------------------------------
     # The development default below is public knowledge: it is in the
@@ -183,8 +236,11 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(
         default=60.0,
         gt=0,
+        le=MAX_LLM_TIMEOUT_SECONDS,
         description="Per-call ceiling passed to the provider SDK, so a model "
-        "call can never hang a request indefinitely.",
+        "call can never hang a request indefinitely. Bounded above as well as "
+        "below: a deployment may be stricter than the ceiling, never more "
+        "permissive, so a mistyped value cannot hold a worker for an hour.",
     )
 
     anthropic_api_key: SecretStr | None = None
@@ -435,6 +491,39 @@ class Settings(BaseSettings):
                 )
         return self
 
+    @field_validator("database_url")
+    @classmethod
+    def _database_url_must_name_the_driver(cls, value: str) -> str:
+        """Catch a mistyped database URL at start-up, not at the first request.
+
+        ``postgresql://`` is the spelling people have in their fingers and it
+        selects SQLAlchemy's *synchronous* driver, which this application does
+        not use - the failure is an exception on the first query rather than
+        anything a deployment would notice at boot.
+
+        **The value is never echoed.** A database URL carries the password, so
+        a message quoting it would put a credential into the log line, the
+        traceback and whatever collects them. Naming the setting and the
+        expected prefix is enough to fix it.
+        """
+        if not value.startswith(DATABASE_URL_PREFIX):
+            raise ValueError(
+                f"DATABASE_URL must start with {DATABASE_URL_PREFIX!r}. "
+                "The value is not shown because it contains the password."
+            )
+        return value
+
+    @field_validator("redis_url")
+    @classmethod
+    def _redis_url_must_name_a_known_scheme(cls, value: str) -> str:
+        """The same rule for Redis, and the same silence about the value."""
+        if not value.startswith(REDIS_URL_SCHEMES):
+            raise ValueError(
+                f"REDIS_URL must start with one of {list(REDIS_URL_SCHEMES)}. "
+                "The value is not shown because it may contain a password."
+            )
+        return value
+
     @model_validator(mode="after")
     def _refuse_the_published_database_password(self) -> Settings:
         """Refuse a deployed environment pointed at the development password.
@@ -586,7 +675,55 @@ class Settings(BaseSettings):
         return self.app_env == "production"
 
 
+class ConfigurationError(RuntimeError):
+    """The process cannot start with the configuration it was given.
+
+    Raised instead of letting a ``ValidationError`` out, because of what that
+    exception *renders*: pydantic appends the input it rejected to every
+    message. For a field validator that input is the field's own value, and for
+    a model validator it is the whole settings dictionary - so a deployment
+    that mistyped one setting prints the ones beside it, API key included, into
+    the first lines of its log.
+
+    Long values are abbreviated in the middle, which makes it worse rather than
+    better: a short secret survives the abbreviation whole, so whether a
+    credential is published depends on how long it happens to be.
+
+    So this carries the validators' own messages and nothing else. Those
+    messages are written to be safe - they name the setting and what it should
+    look like, never the value - and the ones guarding credentials say so
+    explicitly.
+    """
+
+
+def _describe(error: ValidationError) -> str:
+    """Render a validation failure without the value that caused it.
+
+    ``loc`` is the setting's name and ``msg`` is the validator's own sentence.
+    The ``input`` key on each entry is what must not be read, and the way to
+    guarantee it is not read is to build the message from the other two.
+    """
+    lines: list[str] = []
+    for entry in error.errors():
+        location = ".".join(str(part) for part in entry["loc"]) or "configuration"
+        message = str(entry["msg"]).removeprefix("Value error, ")
+        lines.append(f"  {location}: {message}")
+
+    count = len(lines)
+    heading = f"{count} configuration problem{'' if count == 1 else 's'}:"
+    return "\n".join([heading, *lines])
+
+
 @lru_cache
 def get_settings() -> Settings:
-    """Return the process-wide settings instance."""
-    return Settings()
+    """Return the process-wide settings instance.
+
+    The one place a deployment's configuration is read, and therefore the one
+    place that has to be careful about what a failure says out loud.
+    """
+    try:
+        return Settings()
+    except ValidationError as error:
+        # `from None`: chaining would print the original exception underneath
+        # this one, and the original is precisely what carries the values.
+        raise ConfigurationError(_describe(error)) from None
