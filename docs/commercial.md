@@ -37,10 +37,12 @@ conversation would turn on:
 
 - **No hosted service.** Nothing is running anywhere. There is no sign-up, no
   trial, no multi-tenant SaaS operated by anyone.
-- **No paid tier.** The MIT licence covers everything in the repository; there
-  is no second, commercial edition.
+- **No paid tier and no subscription.** The MIT licence covers everything in the
+  repository; there is no second, commercial edition and nothing is billed.
 - **No support contract, SLA or warranty.** The licence's "as is" is the whole
   of it.
+- **No formal consulting package, statement of work or published rate.** The
+  services below are possibilities, not an offering with terms attached.
 - **No retrieval (RAG), audit API, row-level security, rate limiting, quotas,
   token revocation, invitations or password reset.** See
   [evaluation.md](evaluation.md#what-is-not-implemented).

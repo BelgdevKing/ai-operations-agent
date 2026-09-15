@@ -457,6 +457,20 @@ Not started:
 
 ---
 
+## Getting help
+
+| You have | Go here |
+| --- | --- |
+| **A bug** — something behaves differently from how it is documented | [Open an issue](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=bug_report.md). The `X-Request-ID` response header ties your report to the server log line |
+| **A question** about deploying it, integrating it, or why a boundary works the way it does | [Open a question issue](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md). [demo.md](docs/demo.md), [deployment.md](docs/deployment.md) and [evaluation.md](docs/evaluation.md) answer most of them first |
+| **A proposal** for something the platform should do differently | [Open a proposal](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=feature_request.md) |
+| **A security vulnerability** | **Not a public issue.** Use GitHub's private reporting — see [SECURITY.md](SECURITY.md) |
+| **A commercial enquiry** | No contact route is configured yet — see below |
+
+This is a solo project developed in public and unfunded. Issues are read and
+questions are welcome; there is no guaranteed response time, and nothing here
+is a support commitment.
+
 ## If this is useful to your team
 
 The platform is MIT licensed and self-hostable in full — no key, no account, no

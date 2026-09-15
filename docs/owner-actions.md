@@ -49,14 +49,28 @@ exists yet.
 
 ### Visibility
 
-The repository is not public yet. Everything in it has been written on the
-assumption that it will be read by strangers — no secrets, no private paths, no
-internal references — so making it public is a decision rather than a cleanup
-task.
+The repository is private. **Only the owner should make it public, and only
+after reading through the repository themselves.** An automated scan is not a
+substitute for that: it finds credential-shaped strings, not a comment that
+names an internal system or an example that happens to be a real customer.
 
-Worth doing before flipping it: read [SECURITY.md](../SECURITY.md) and confirm
-the scope section says what you want it to say, since it becomes a public
-commitment about how reports are handled.
+What has been checked — a point-in-time audit, worth repeating immediately
+before you publish rather than trusted as a standing guarantee:
+
+- **All 357 tracked files** scanned for provider and cloud credential prefixes,
+  PEM private-key markers, JWT-shaped tokens, credentialed database URLs and
+  literal secret assignments. Every match was inspected. All are either the
+  development defaults this repository publishes on purpose — and which a
+  deployed environment refuses to start on — or test fixtures whose whole
+  purpose is to assert that a value never escapes.
+- **All 578 blobs across the 20 commits of history**, for the same credential
+  patterns. Nothing found.
+- **No `.env`, key, log, dump, build output or cache has ever been committed**,
+  on any branch, at any point in the history.
+
+Also worth doing before flipping it: read [SECURITY.md](../SECURITY.md) and
+confirm the scope section says what you want it to say, since it becomes a
+public commitment about how reports are handled.
 
 ### Discussions
 
