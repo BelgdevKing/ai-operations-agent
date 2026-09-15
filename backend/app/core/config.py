@@ -7,11 +7,13 @@ values are supplied by the environment; nothing secret is ever hard-coded.
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.observability.pricing import PriceBook
 
 Environment = Literal["development", "staging", "production", "test"]
 LogFormat = Literal["json", "console"]
@@ -59,11 +61,28 @@ MAX_WORKFLOW_PAYLOAD_BYTES = 262_144
 MIN_APPROVAL_EXPIRATION_SECONDS = 60
 MAX_APPROVAL_EXPIRATION_SECONDS = 2_592_000
 
+# How far back a single usage report may reach. Usage is aggregated from the
+# execution tables at read time, and the indexes that make that fast are on
+# (organization_id, created_at) - so an unbounded window is the one query shape
+# that would not use them. A quarter is long enough for "last month" and
+# "last quarter", which is what anybody actually asks.
+MAX_USAGE_WINDOW_DAYS = 366
+DEFAULT_USAGE_WINDOW_DAYS = 92
+
+# Most groups one usage report may return. A report is a summary; anything that
+# needs more rows than this is an export, and an export is a different feature
+# with different authorization.
+MAX_USAGE_GROUPS = 200
+
 # Which vendor serves model calls. Only the selected one needs a credential.
 LLMProviderName = Literal["anthropic", "openai"]
 
 # Below this, a brute-forced HMAC key is within reach.
 MIN_PRODUCTION_SECRET_LENGTH = 32
+
+# A metrics token is compared in constant time, so its only real defence is
+# length. Short enough to type, long enough not to be guessed.
+MIN_METRICS_TOKEN_LENGTH = 16
 
 
 class Settings(BaseSettings):
@@ -290,6 +309,45 @@ class Settings(BaseSettings):
         "approval_expired rather than left waiting forever.",
     )
 
+    # -- Observability, usage and cost -----------------------------------------
+    #
+    # Metrics are process-wide and carry no tenant dimension, so the endpoint
+    # that exposes them is protected by a shared token rather than by a user
+    # session: the caller is a scraper, not a person, and it has no
+    # organization to be scoped to.
+    metrics_enabled: bool = Field(
+        default=False,
+        description="Whether GET /metrics is served at all. Off by default: an "
+        "exposition endpoint is a thing to enable deliberately, and a "
+        "deployment that has not thought about who may scrape it should not "
+        "have one.",
+    )
+    metrics_token: str | None = Field(
+        default=None,
+        min_length=MIN_METRICS_TOKEN_LENGTH,
+        description="Shared secret a scraper presents as 'Authorization: "
+        "Bearer <token>'. Required whenever metrics are enabled - see the "
+        "validator; there is no unauthenticated mode.",
+    )
+
+    llm_pricing: str = Field(
+        default="",
+        description="The price book, as JSON. Empty by default, which is the "
+        "honest state for a deployment nobody has priced: usage is reported in "
+        "full and cost is reported as unknown. See "
+        "app/observability/pricing.py for the shape - note that prices are "
+        "quoted as strings, because a JSON number is a float by the time "
+        "Python has read it.",
+    )
+
+    usage_window_days: int = Field(
+        default=DEFAULT_USAGE_WINDOW_DAYS,
+        ge=1,
+        le=MAX_USAGE_WINDOW_DAYS,
+        description="Longest period one usage report may cover. A ceiling on "
+        "how much of the execution history a single query walks.",
+    )
+
     # -- Tool framework --------------------------------------------------------
     #
     # A tool talks to systems outside this process, so both limits below exist
@@ -355,6 +413,48 @@ class Settings(BaseSettings):
                 f"{self.llm_provider.upper()}_API_KEY must be set in {self.app_env}."
             )
         return self
+
+    @model_validator(mode="after")
+    def _metrics_need_a_token_whenever_they_are_served(self) -> Settings:
+        """There is no unauthenticated metrics mode, in any environment.
+
+        Checked here rather than in the endpoint because the dangerous state is
+        a deployment that *starts*: an exposition endpoint that answers anyone
+        is the one Part 19 mistake that cannot be noticed by reading a
+        dashboard. A deployment that enables metrics without a token fails to
+        boot, which is noticed immediately.
+
+        Development is not excepted. A developer who turns metrics on locally
+        gets a one-line error telling them to set a token, which is cheaper
+        than the habit of expecting the endpoint to be open.
+        """
+        if self.metrics_enabled and not self.metrics_token:
+            raise ValueError(
+                "METRICS_ENABLED is true, so METRICS_TOKEN must be set: "
+                'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _pricing_must_parse(self) -> Settings:
+        """Refuse to start with a price book nobody can read.
+
+        A malformed book would otherwise surface as "cost unavailable" on every
+        report - indistinguishable from the legitimate unpriced case, and
+        therefore invisible.
+        """
+        self.price_book  # noqa: B018 - built for its validation, cached below
+        return self
+
+    @cached_property
+    def price_book(self) -> PriceBook:
+        """The configured prices, parsed once.
+
+        Cached on the settings object, which lives as long as the application,
+        so a report does not re-parse JSON per request and every figure in one
+        deployment comes from one book version.
+        """
+        return PriceBook.from_json(self.llm_pricing)
 
     @property
     def llm_api_key(self) -> SecretStr | None:

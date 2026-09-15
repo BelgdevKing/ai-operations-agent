@@ -48,6 +48,7 @@ from app.models.enums import (
     WorkflowStatus,
     WorkflowStepType,
 )
+from app.models.generation import GenerationUsage
 from app.models.mixins import (
     CreatedAtMixin,
     OrganizationScopedMixin,
@@ -77,6 +78,7 @@ __all__ = [
     "CustomerStatus",
     "Document",
     "DocumentStatus",
+    "GenerationUsage",
     "Invoice",
     "InvoiceStatus",
     "MemberRole",

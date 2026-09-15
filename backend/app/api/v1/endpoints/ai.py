@@ -13,6 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.deps import AIServiceDep, RequireMember
+from app.core.context import get_request_id
 from app.schemas.ai import AIUsage, GenerateRequest, GenerateResponse
 from app.schemas.common import ErrorResponse
 
@@ -68,6 +69,8 @@ async def generate(
         temperature=payload.temperature,
         max_output_tokens=payload.max_output_tokens,
         organization_id=membership.organization_id,
+        user_id=membership.user_id,
+        request_id=get_request_id(),
     )
 
     return GenerateResponse(

@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ReadinessPanel } from "@/components/readiness-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { UsageSummary } from "@/components/usage/usage-summary";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -16,10 +17,6 @@ const PLANNED = [
   {
     title: "Agent runs",
     description: "Every execution with its steps, tokens, latency and outcome.",
-  },
-  {
-    title: "Pending approvals",
-    description: "Sensitive actions waiting for a human decision.",
   },
 ] as const;
 
@@ -34,6 +31,7 @@ export default function DashboardPage() {
       <div className="grid gap-4 sm:grid-cols-2">
         <CurrentUserCard />
         <ReadinessPanel />
+        <UsageSummary />
 
         {PLANNED.map((item) => (
           <Card key={item.title}>

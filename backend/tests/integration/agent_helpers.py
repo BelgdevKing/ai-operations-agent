@@ -89,7 +89,16 @@ def script(app: FastAPI, *decisions: Any) -> ScriptedProvider:
     scripted = ScriptedProvider(*decisions)
 
     def override() -> LLMGateway:
-        return LLMGateway(scripted, retry=RetryPolicy(max_retries=0), sleep=_no_sleep)
+        # The application's own instruments, as the real dependency hands them
+        # over. Without this the scripted gateway measures nothing, and a test
+        # asserting "one model call was counted" would be asserting against a
+        # double that behaves differently from the thing it stands in for.
+        return LLMGateway(
+            scripted,
+            retry=RetryPolicy(max_retries=0),
+            sleep=_no_sleep,
+            instruments=getattr(app.state, "instruments", None),
+        )
 
     app.dependency_overrides[get_llm_gateway] = override
     return scripted

@@ -62,6 +62,7 @@ from app.models.agent_run import AgentRunRecord
 from app.models.approval import Approval
 from app.models.enums import ApprovalStatus
 from app.models.organization import OrganizationMember
+from app.observability.instruments import Instruments, NullInstruments
 from app.repositories.agent_run import AgentRunRepository, ToolExecutionRepository
 from app.repositories.approval import ApprovalRepository
 from app.repositories.conversation import (
@@ -196,6 +197,7 @@ class ApprovalService:
         executor: ToolExecutor,
         tools: ToolRegistry | None = None,
         workflows: WorkflowService | None = None,
+        instruments: Instruments | None = None,
     ) -> None:
         self._session = session
         # A factory rather than a runtime: building one builds the LLM gateway,
@@ -211,6 +213,7 @@ class ApprovalService:
         # A workflow approval arriving without it is reported as unresumable
         # rather than silently decided and abandoned.
         self._workflows = workflows
+        self._instruments = instruments or NullInstruments()
 
         # From the verified membership, once. Every query below is scoped to it.
         self._organization_id = membership.organization_id
@@ -249,7 +252,11 @@ class ApprovalService:
                 organization's approvals - which is the same answer whether it
                 never existed or belongs to somebody else.
         """
-        await expire_due(self._session, organization_id=self._organization_id)
+        await expire_due(
+            self._session,
+            organization_id=self._organization_id,
+            instruments=self._instruments,
+        )
 
         after: Approval | None = None
         if cursor is not None:
@@ -322,6 +329,14 @@ class ApprovalService:
         await record_approval_decision(self._session, decided, decided_by=self._user_id)
         await self._session.commit()
 
+        # How long a person took, from the two timestamps the row already
+        # carries. Recorded once, here, by the request that won the conditional
+        # update - so a second decision arriving at the same moment is a
+        # conflict and not a second observation.
+        self._instruments.record_approval_decision(
+            decision=decided.status.value, waited_seconds=_waited(decided)
+        )
+
         logger.info(
             "Approval decided",
             extra={
@@ -381,7 +396,11 @@ class ApprovalService:
         if current.status is not ApprovalStatus.PENDING:
             raise ApprovalAlreadyDecidedError()
 
-        await expire_due(self._session, organization_id=self._organization_id)
+        await expire_due(
+            self._session,
+            organization_id=self._organization_id,
+            instruments=self._instruments,
+        )
         raise ApprovalExpiredError()
 
     async def _resume_workflow(self, approval: Approval, *, approve: bool) -> WorkflowRunView:
@@ -534,3 +553,16 @@ class ApprovalService:
             self._session, self._runtime, self._settings, self._membership, self._tools
         )
         return await execution.get(record.id)
+
+
+def _waited(approval: Approval) -> float | None:
+    """Seconds between the request and the decision, or nothing.
+
+    Derived from ``requested_at`` and ``approved_at``, both of which the
+    approval already carries - the human-in-the-loop phase made decision
+    latency answerable without storing it, and a metric is not a reason to
+    start.
+    """
+    if approval.approved_at is None:
+        return None
+    return max((approval.approved_at - approval.requested_at).total_seconds(), 0.0)

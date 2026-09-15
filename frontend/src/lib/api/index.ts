@@ -17,6 +17,7 @@ export {
   getOrganization,
   getReadiness,
   getRun,
+  getUsage,
   getWorkflowRun,
   listAgents,
   listApprovals,
@@ -37,6 +38,7 @@ export type {
   ListMembersOptions,
   RunAgentOptions,
   StartWorkflowOptions,
+  UsageQueryOptions,
 } from "./endpoints";
 export { describeError, describeSignInError, fieldErrorsOf } from "./presentation";
 export type { ErrorPresentation } from "./presentation";

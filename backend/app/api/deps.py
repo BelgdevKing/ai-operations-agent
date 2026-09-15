@@ -42,14 +42,17 @@ from app.core.security import TokenError, decode_access_token
 from app.models.enums import MemberRole, OrganizationStatus, UserStatus
 from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
+from app.observability.instruments import Instruments, NullInstruments
 from app.repositories.membership import MembershipLookup
 from app.repositories.user import UserRepository
 from app.services.agent_execution import AgentExecutionService, RunView
 from app.services.ai import AIService
 from app.services.approvals import ApprovalService
 from app.services.auth import AuthService
+from app.services.generation_usage import DatabaseGenerationRecorder
 from app.services.health import HealthService
 from app.services.membership import MembershipService
+from app.services.usage import UsageService
 from app.services.workflow_execution import WorkflowService
 from app.tools.business import build_business_registry
 from app.tools.executor import ToolExecutor
@@ -281,7 +284,9 @@ RequireMember = Annotated[OrganizationMember, Depends(require_role(MemberRole.ME
 # -- Language models ----------------------------------------------------------
 
 
-def get_llm_gateway(request: Request, settings: SettingsDep) -> LLMGateway:
+def get_llm_gateway(
+    request: Request, settings: SettingsDep, instruments: InstrumentsDep
+) -> LLMGateway:
     """The application's gateway, built once and reused.
 
     Cached on application state rather than in a module-level singleton, so
@@ -295,7 +300,7 @@ def get_llm_gateway(request: Request, settings: SettingsDep) -> LLMGateway:
     """
     gateway: LLMGateway | None = getattr(request.app.state, "llm_gateway", None)
     if gateway is None:
-        gateway = LLMGateway.from_settings(settings)
+        gateway = LLMGateway.from_settings(settings, instruments=instruments)
         request.app.state.llm_gateway = gateway
     return gateway
 
@@ -304,8 +309,25 @@ LLMGatewayDep = Annotated[LLMGateway, Depends(get_llm_gateway)]
 """The configured LLM gateway."""
 
 
-def get_ai_service(gateway: LLMGatewayDep, settings: SettingsDep) -> AIService:
-    return AIService(gateway, settings)
+def get_ai_service(
+    gateway: LLMGatewayDep,
+    settings: SettingsDep,
+    session: SessionDep,
+    membership: CurrentMembership,
+) -> AIService:
+    """Direct generation, with somewhere for its usage to go.
+
+    ``membership`` is declared before ``gateway`` would be resolved in the
+    endpoint's own signature, and that ordering is the one that matters - see
+    the note on ``POST /ai/generate``. Here the recorder is built from the same
+    verified membership the endpoint authorised against, so a direct generation
+    cannot be attributed to a tenant other than the caller's own.
+    """
+    return AIService(
+        gateway,
+        settings,
+        DatabaseGenerationRecorder(session, membership.organization_id),
+    )
 
 
 AIServiceDep = Annotated[AIService, Depends(get_ai_service)]
@@ -348,8 +370,28 @@ ToolRegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
 """The tools this deployment offers."""
 
 
-def get_tool_executor(registry: ToolRegistryDep, settings: SettingsDep) -> ToolExecutor:
-    return ToolExecutor(registry, settings)
+def get_instruments(request: Request) -> Instruments:
+    """The metric registry this application was built with.
+
+    Read from application state rather than a module-level singleton, for the
+    same reason settings are: each application ``create_app`` builds - including
+    each one a test builds - measures on its own.
+
+    Null instruments when there are none, so a component assembled outside an
+    application still works and simply keeps no numbers.
+    """
+    instruments: Instruments | None = getattr(request.app.state, "instruments", None)
+    return instruments or NullInstruments()
+
+
+InstrumentsDep = Annotated[Instruments, Depends(get_instruments)]
+"""Where a boundary records what it did. Never where it records *who for*."""
+
+
+def get_tool_executor(
+    registry: ToolRegistryDep, settings: SettingsDep, instruments: InstrumentsDep
+) -> ToolExecutor:
+    return ToolExecutor(registry, settings, instruments=instruments)
 
 
 ToolExecutorDep = Annotated[ToolExecutor, Depends(get_tool_executor)]
@@ -376,6 +418,7 @@ def get_agent_execution_service(
     settings: SettingsDep,
     executor: ToolExecutorDep,
     registry: ToolRegistryDep,
+    instruments: InstrumentsDep,
 ) -> AgentExecutionService:
     """Durable agent execution, fixed to the caller's organization.
 
@@ -395,7 +438,9 @@ def get_agent_execution_service(
             executor,
         )
 
-    return AgentExecutionService(session, runtime, settings, membership, registry)
+    return AgentExecutionService(
+        session, runtime, settings, membership, registry, instruments=instruments
+    )
 
 
 AgentExecutionServiceDep = Annotated[AgentExecutionService, Depends(get_agent_execution_service)]
@@ -419,7 +464,7 @@ def resolve_llm_gateway(request: Request, settings: Settings) -> LLMGateway:
     if override is not None:
         gateway: LLMGateway = override()
         return gateway
-    return get_llm_gateway(request, settings)
+    return get_llm_gateway(request, settings, get_instruments(request))
 
 
 class LazyAgentStepRunner:
@@ -491,6 +536,7 @@ def get_workflow_service(
     executor: ToolExecutorDep,
     registry: ToolRegistryDep,
     agents: AgentRegistryDep,
+    instruments: InstrumentsDep,
 ) -> WorkflowService:
     """Workflow definitions and runs, fixed to the caller's organization.
 
@@ -507,6 +553,7 @@ def get_workflow_service(
         registry=registry,
         agents=LazyAgentStepRunner(request, session, settings, membership, executor, registry),
         agent_registry=agents,
+        instruments=instruments,
     )
 
 
@@ -522,6 +569,7 @@ def get_approval_service(
     executor: ToolExecutorDep,
     registry: ToolRegistryDep,
     workflows: WorkflowServiceDep,
+    instruments: InstrumentsDep,
 ) -> ApprovalService:
     """Reading and deciding approvals, fixed to the caller's organization.
 
@@ -543,11 +591,36 @@ def get_approval_service(
             executor,
         )
 
-    return ApprovalService(session, runtime, settings, membership, executor, registry, workflows)
+    return ApprovalService(
+        session,
+        runtime,
+        settings,
+        membership,
+        executor,
+        registry,
+        workflows,
+        instruments=instruments,
+    )
 
 
 ApprovalServiceDep = Annotated[ApprovalService, Depends(get_approval_service)]
 """The approval queue, and the decisions that resume a paused run."""
+
+
+def get_usage_service(
+    session: SessionDep, settings: SettingsDep, membership: CurrentMembership
+) -> UsageService:
+    """Usage reporting, fixed to the caller's organization.
+
+    No runtime, no gateway, no executor: a usage report reads rows and consults
+    a price table, and a deployment with no provider credential must still be
+    able to answer "what did we use last month".
+    """
+    return UsageService(session, settings, membership)
+
+
+UsageServiceDep = Annotated[UsageService, Depends(get_usage_service)]
+"""Aggregated usage and estimated cost for the current organization."""
 
 
 def get_membership_service(session: SessionDep, membership: CurrentMembership) -> MembershipService:

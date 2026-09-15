@@ -57,6 +57,7 @@ from app.models.agent_run import ToolExecutionRecord
 from app.models.approval import Approval
 from app.models.enums import ApprovalStatus, RunStatus, StepRunStatus, WorkflowStepType
 from app.models.workflow import WorkflowRun, WorkflowStepRun
+from app.observability.instruments import Instruments, NullInstruments
 from app.repositories.agent_run import ToolExecutionRepository
 from app.repositories.approval import ApprovalRepository
 from app.repositories.workflow import WorkflowRunRepository, WorkflowStepRunRepository
@@ -191,6 +192,7 @@ class WorkflowEngine:
         tools: ToolRunner,
         registry: ToolRegistry,
         agents: AgentStepRunner,
+        instruments: Instruments | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -200,6 +202,7 @@ class WorkflowEngine:
         self._tools = tools
         self._registry = registry
         self._agents = agents
+        self._instruments = instruments or NullInstruments()
 
         self._runs = WorkflowRunRepository(session, organization_id)
         self._steps = WorkflowStepRunRepository(session, organization_id)
@@ -711,6 +714,12 @@ class WorkflowEngine:
             context.record(step_run.step_key, outcome.output)
 
         await self._session.commit()
+
+        # The step's kind and state, both enums. Never the step *key*, which is
+        # a name a workflow author chose and therefore unbounded.
+        self._instruments.record_workflow_step(
+            step_type=step_run.step_type.value, status=outcome.status.value
+        )
 
         logger.info(
             "Workflow step finished",

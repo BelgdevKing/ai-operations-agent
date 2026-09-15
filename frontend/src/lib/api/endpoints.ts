@@ -35,6 +35,7 @@ import type {
   GenerateRequest,
   GenerateResponse,
   WorkflowRunResponse,
+  UsageResponse,
   WorkflowStepRunResponse,
   WorkflowSummary,
 } from "@/types/ai";
@@ -398,6 +399,41 @@ export function cancelRun(
     undefined,
     options,
   );
+}
+
+
+// -- Usage --------------------------------------------------------------------
+
+/** Which window a usage report should cover. */
+export interface UsageQueryOptions extends CallOptions {
+  /** Start of the window, ISO-8601. Defaults to the backend's configured span. */
+  since?: string;
+  /** End, exclusive, ISO-8601. Defaults to now. */
+  until?: string;
+  /** Ask for the per-day breakdown. One extra query server-side; off by default. */
+  includeDays?: boolean;
+}
+
+/**
+ * This organization's usage and estimated cost.
+ *
+ * Readable by any active member. The organization is never sent: the backend
+ * takes it from the verified membership, so there is no parameter here that
+ * could ask about somebody else's usage.
+ */
+export function getUsage(
+  caller: ApiCaller,
+  options: UsageQueryOptions = {},
+): Promise<UsageResponse> {
+  const { since, until, includeDays, ...call } = options;
+
+  const query = new URLSearchParams();
+  if (since !== undefined) query.set("since", since);
+  if (until !== undefined) query.set("until", until);
+  if (includeDays) query.set("include_days", "true");
+
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return caller.get<UsageResponse>(`${V1}/ai/usage${suffix}`, call);
 }
 
 // -- Workflows -----------------------------------------------------------------

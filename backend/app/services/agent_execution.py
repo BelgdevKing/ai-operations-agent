@@ -53,6 +53,7 @@ from app.models.agent_run import AgentRunRecord, ToolExecutionRecord
 from app.models.approval import Approval
 from app.models.enums import ApprovalStatus, MessageRole
 from app.models.organization import OrganizationMember
+from app.observability.instruments import Instruments, NullInstruments
 from app.repositories.agent_run import AgentRunRepository, ToolExecutionRepository
 from app.repositories.approval import ApprovalRepository
 from app.repositories.conversation import ConversationRepository
@@ -126,6 +127,7 @@ class AgentExecutionService:
         settings: Settings,
         membership: OrganizationMember,
         tools: ToolRegistry | None = None,
+        instruments: Instruments | None = None,
     ) -> None:
         self._session = session
         # A factory rather than a runtime, for the same reason the approval
@@ -137,6 +139,9 @@ class AgentExecutionService:
         self._runtime = runtime
         self._settings = settings
         self._tools = tools
+        # Recorded at the same chokepoint the audit trail uses, so the two
+        # cannot end up counting different things.
+        self._instruments = instruments or NullInstruments()
 
         # Fixed from the caller's verified membership, once, here. Nothing below
         # takes an organization from an argument, so there is no expression a
@@ -297,20 +302,21 @@ class AgentExecutionService:
     async def cancel(self, run_id: uuid.UUID) -> RunView:
         """Stop a run that is waiting on somebody, and withdraw its question.
 
-        Order matters and is the opposite of the intuitive one: the **run** is
-        cancelled first, then its approvals are withdrawn. Both statements are
-        conditional, so if an approval is being decided at this instant one of
-        two things happens and neither is bad:
+        Order matters, and it is the approval first. Both statements are
+        conditional and both have ``pending`` in the ``WHERE``, so the approval
+        row decides which of two simultaneous requests wins:
 
-        * this call wins the run - the decision then finds the run no longer
-          ``awaiting_approval`` and reports that it cannot be resumed, having
+        * this call withdraws the approval - a decision arriving after that
+          changes no row and is told the approval is already decided, having
           executed nothing;
-        * the decision wins the run - this call changes no row and is told the
-          run is not cancellable, having withdrawn nothing.
+        * a decision withdraws it first - this call finds nothing to withdraw,
+          refuses, and touches the run at all.
 
         What cannot happen is the action running after the run is durably
-        cancelled, because the tool is only ever reached through a decision that
-        found the run paused.
+        cancelled. It *could* when the run was cancelled first: a decision that
+        had already won the approval row went on to claim the execution and
+        resume the run over the top of the cancellation, and both requests
+        answered 200.
 
         Raises:
             RunNotFoundError: Not this organization's run.
@@ -320,15 +326,51 @@ class AgentExecutionService:
         if record is None:
             raise RunNotFoundError()
 
+        # **The approval row is the arbiter, and it is taken first.**
+        #
+        # Cancelling the run first looked right and was not: a decision that had
+        # already won the approval row was, at that moment, on its way to
+        # claiming the execution and resuming the run - so the cancellation
+        # landed, this call answered 200, and the tool then ran anyway and wrote
+        # the run back to completed. Both sides won, which is the one outcome
+        # this pair of conditional updates exists to prevent.
+        #
+        # Withdrawing the approval first makes that impossible. Whichever
+        # request moves ``approvals.status`` out of ``pending`` has won:
+        # a decision that gets there first leaves nothing to withdraw and this
+        # call refuses, and a cancellation that gets there first leaves nothing
+        # to decide and the decision is told so.
+        pending = [
+            approval
+            for approval in await self._approvals.list_for_run(record.id)
+            if approval.status is ApprovalStatus.PENDING
+        ]
+        withdrawn = await self._approvals.cancel_for_run(record.id)
+
+        if withdrawn == 0:
+            # Nothing pending was withdrawn, so this call did not win. Either a
+            # decision is already recorded and is resuming this run at this
+            # moment, or the run is not actually waiting on anybody. Refusing
+            # covers both, and nothing is written: the raise rolls the
+            # transaction back before the run itself is touched.
+            #
+            # Reading the pending list first and checking *that* is not enough,
+            # and was the first attempt: a decision that had already been
+            # recorded leaves nothing pending to read, so the check passed and
+            # the cancellation went ahead into the resume. The update's own
+            # rowcount is the only thing that proves this call won.
+            raise RunNotCancellableError()
+
         if not await self._runs.cancel_paused(record.id):
             raise RunNotCancellableError()
 
-        for approval in await self._approvals.list_for_run(record.id):
-            if approval.status is ApprovalStatus.PENDING:
-                await record_approval_cancelled(self._session, approval, cancelled_by=self._user_id)
+        for approval in pending:
+            await record_approval_cancelled(self._session, approval, cancelled_by=self._user_id)
 
-        await self._approvals.cancel_for_run(record.id)
         await self._session.commit()
+
+        for _ in range(withdrawn):
+            self._instruments.record_approval_decision(decision="cancelled", waited_seconds=None)
         await self._session.refresh(record)
 
         logger.info(
@@ -460,6 +502,15 @@ class AgentExecutionService:
 
     async def _audit_outcome(self, run: AgentRun) -> None:
         await record_agent_run(self._session, run)
+
+        # One measurement per request that advanced this run, which is the same
+        # grain as the audit event beside it. A run that pauses for approval and
+        # later resumes is therefore counted once as `awaiting_approval` and
+        # once as whatever it finally became - not once overall, and not twice
+        # as completed.
+        self._instruments.record_agent_run(status=run.status.value, milliseconds=run.latency_ms)
+        if run.error_code:
+            self._instruments.record_error(error_code=run.error_code, layer="agent")
 
         if run.status is AgentRunStatus.AWAITING_APPROVAL and run.pending_tool_execution_id:
             approval = await self._approvals.get_for_execution(run.pending_tool_execution_id)

@@ -9,6 +9,13 @@ what the defaults are - and leaves everything operational to the gateway.
 What it deliberately does not do: pick a provider, retry, translate provider
 errors, or touch an SDK. Those belong below it, and duplicating them here is
 how a second, subtly different policy gets born.
+
+It also does not hold a database session, and the usage accounting added by the
+observability phase did not change that: it is given a
+:class:`~app.services.generation_usage.GenerationRecorder` - a protocol with one
+method - rather than a repository. The same arrangement the agent runtime has
+with its journal, and for the same reason: whether a call is written down is a
+question about deployment, not about what the application permits.
 """
 
 from __future__ import annotations
@@ -24,6 +31,11 @@ from app.ai.gateway import LLMGateway
 from app.ai.models import LLMMessage, LLMRequest, LLMResponse, LLMStructuredResponse
 from app.core.config import Settings
 from app.core.exceptions import ValidationError
+from app.services.generation_usage import (
+    NULL_RECORDER,
+    GenerationRecord,
+    GenerationRecorder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +43,17 @@ logger = logging.getLogger(__name__)
 class AIService:
     """Generates completions on behalf of the application."""
 
-    def __init__(self, gateway: LLMGateway, settings: Settings) -> None:
+    def __init__(
+        self,
+        gateway: LLMGateway,
+        settings: Settings,
+        recorder: GenerationRecorder | None = None,
+    ) -> None:
         self._gateway = gateway
         self._settings = settings
+        # Null by default, so a service built without a database still
+        # generates - which is what every unit test does.
+        self._recorder = recorder or NULL_RECORDER
 
     async def generate(
         self,
@@ -43,6 +63,8 @@ class AIService:
         temperature: float | None = None,
         max_output_tokens: int | None = None,
         organization_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+        request_id: str | None = None,
     ) -> LLMResponse:
         """Ask the configured model for a completion.
 
@@ -57,6 +79,11 @@ class AIService:
             organization_id: The tenant this call is on behalf of. Recorded for
                 attribution only; it comes from the caller's verified
                 membership, never from a request body.
+            user_id: Who asked. Written to the usage record, and from the same
+                verified membership.
+            request_id: The HTTP correlation id, so one usage figure can be
+                traced back to the request that produced it. Correlation only -
+                nothing is keyed or deduplicated on it.
 
         Raises:
             ValidationError: The requested model is not permitted.
@@ -82,7 +109,19 @@ class AIService:
             },
         )
 
-        return await self._gateway.generate(request)
+        response = await self._gateway.generate(request)
+
+        # After the call, and only on success: a call that raised spent no
+        # tokens anybody can account for, and the gateway has already counted
+        # the failure. Recorded here rather than in the endpoint so that every
+        # caller of this method is accounted for, not just the HTTP one.
+        if user_id is not None:
+            await self._recorder.record(
+                GenerationRecord.from_response(response, request_id=request_id),
+                user_id=user_id,
+            )
+
+        return response
 
     async def generate_structured[DataT: BaseModel](
         self,

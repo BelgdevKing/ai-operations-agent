@@ -47,6 +47,7 @@ from app.models.agent_run import AgentRunRecord
 from app.models.enums import RunStatus, StepRunStatus
 from app.models.organization import Organization
 from app.models.workflow import WorkflowRun, WorkflowStepRun
+from app.observability.instruments import Instruments, NullInstruments
 from app.repositories.approval import ApprovalRepository
 from app.services.audit import record_approval_expired
 
@@ -60,7 +61,12 @@ EXPIRED_ERROR_MESSAGE = (
 )
 
 
-async def expire_due(session: AsyncSession, *, organization_id: uuid.UUID) -> int:
+async def expire_due(
+    session: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    instruments: Instruments | None = None,
+) -> int:
     """Lapse this organization's overdue approvals, and stop what they held up.
 
     Tenant-scoped through :class:`ApprovalRepository`, so this is safe to call
@@ -71,6 +77,7 @@ async def expire_due(session: AsyncSession, *, organization_id: uuid.UUID) -> in
     """
     approvals = ApprovalRepository(session, organization_id)
     lapsed = await approvals.expire_due()
+    metrics = instruments or NullInstruments()
 
     if not lapsed:
         return 0
@@ -90,6 +97,13 @@ async def expire_due(session: AsyncSession, *, organization_id: uuid.UUID) -> in
             tool_name=row.tool_name,
             requested_by=row.requested_by,
         )
+
+    # One per approval this call actually won, so a concurrent sweep dealing
+    # with the rest does not make anybody count them twice. The wait is not
+    # recorded: nothing decided these, so "how long did a person take" has no
+    # answer for them.
+    for _ in lapsed:
+        metrics.record_approval_decision(decision="expired", waited_seconds=None)
 
     await session.commit()
 

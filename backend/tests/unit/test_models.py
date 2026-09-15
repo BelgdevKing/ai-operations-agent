@@ -26,6 +26,7 @@ from app.models import (
     Conversation,
     Customer,
     Document,
+    GenerationUsage,
     Invoice,
     Message,
     Organization,
@@ -64,6 +65,7 @@ ALL_MODELS = [
     Conversation,
     Customer,
     Document,
+    GenerationUsage,
     Invoice,
     Message,
     Organization,
@@ -93,6 +95,7 @@ EXPECTED_TABLES = {
     "audit_events",
     "conversations",
     "documents",
+    "generation_usage",
     "messages",
     "organization_members",
     "organizations",
@@ -115,6 +118,7 @@ TENANT_SCOPED = {
     "conversations",
     "customers",
     "documents",
+    "generation_usage",
     "invoices",
     "organization_members",
     "shipment_charges",
@@ -144,7 +148,7 @@ def table_of(model: type) -> Table:
 
 def test_all_models_import() -> None:
     """Every model is importable from the package root."""
-    assert len(ALL_MODELS) == 22
+    assert len(ALL_MODELS) == 23
     for model in ALL_MODELS:
         assert issubclass(model, Base)
 
@@ -281,7 +285,16 @@ def test_mutable_tables_have_updated_at_and_append_only_ones_do_not() -> None:
     # A step is written once and never revised: what a model call decided does
     # not change afterwards. A run and a tool execution both do change - that is
     # the whole point of a durable record you can resume.
-    append_only = {"messages", "audit_events", "agent_tools", "agent_steps"}
+    # A direct generation's usage joins the append-only set for the same reason
+    # a step is in it: the row records that a call happened with these tokens,
+    # and that does not change afterwards.
+    append_only = {
+        "messages",
+        "audit_events",
+        "agent_tools",
+        "agent_steps",
+        "generation_usage",
+    }
 
     for name, table in Base.metadata.tables.items():
         if name in append_only:

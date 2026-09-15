@@ -31,7 +31,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
@@ -44,6 +44,7 @@ from app.models.approval import Approval
 from app.models.enums import ApprovalStatus, RunStatus, WorkflowStatus
 from app.models.organization import OrganizationMember
 from app.models.workflow import Workflow, WorkflowRun, WorkflowStepRun
+from app.observability.instruments import Instruments, NullInstruments
 from app.repositories.approval import ApprovalRepository
 from app.repositories.workflow import (
     WorkflowRepository,
@@ -101,6 +102,7 @@ class WorkflowService:
         registry: ToolRegistry,
         agents: AgentStepRunner,
         agent_registry: AgentRegistry,
+        instruments: Instruments | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -115,6 +117,8 @@ class WorkflowService:
         self._user_id = membership.user_id
 
         self._workflows = WorkflowRepository(session, self._organization_id)
+        self._instruments = instruments or NullInstruments()
+
         self._runs = WorkflowRunRepository(session, self._organization_id)
         self._steps = WorkflowStepRunRepository(session, self._organization_id)
         self._approvals = ApprovalRepository(session, self._organization_id)
@@ -325,15 +329,33 @@ class WorkflowService:
         if run is None:
             raise WorkflowRunNotFoundError()
 
+        # The approval row first, for the reason the agent runtime's own
+        # cancellation spells out: taking the run first let a decision that had
+        # already won the approval resume over the top of the cancellation, and
+        # both requests answered 200.
+        pending = [
+            approval
+            for approval in await self._approvals.list_for_workflow_run(run.id)
+            if approval.status is ApprovalStatus.PENDING
+        ]
+        withdrawn = await self._approvals.cancel_for_workflow_run(run.id)
+
+        if withdrawn == 0:
+            # The update's rowcount, not the read: an already-recorded decision
+            # leaves nothing pending to find. See the agent runtime's own
+            # cancellation for the interleaving this closes.
+            raise WorkflowRunNotCancellableError()
+
         if not await self._runs.cancel_paused(run.id):
             raise WorkflowRunNotCancellableError()
 
-        for approval in await self._approvals.list_for_workflow_run(run.id):
-            if approval.status is ApprovalStatus.PENDING:
-                await record_approval_cancelled(self._session, approval, cancelled_by=self._user_id)
+        for approval in pending:
+            await record_approval_cancelled(self._session, approval, cancelled_by=self._user_id)
 
-        await self._approvals.cancel_for_workflow_run(run.id)
         await self._steps.cancel_paused(run.id)
+
+        for _ in range(withdrawn):
+            self._instruments.record_approval_decision(decision="cancelled", waited_seconds=None)
         await self._session.commit()
 
         await self._audit_outcome(run)
@@ -392,6 +414,7 @@ class WorkflowService:
             tools=self._tools,
             registry=self._registry,
             agents=self._agents,
+            instruments=self._instruments,
         )
 
     async def _require_workflow(self, workflow_id: uuid.UUID) -> Workflow:
@@ -481,6 +504,15 @@ class WorkflowService:
     async def _audit_outcome(self, run: WorkflowRun) -> None:
         await record_workflow_run_outcome(self._session, run)
 
+        # The same grain as the audit event: once per request that advanced the
+        # run. A run that paused and resumed is counted at each stop, which is
+        # what makes "how many runs are waiting on somebody" answerable.
+        self._instruments.record_workflow_run(
+            status=run.status.value, milliseconds=_elapsed_ms(run)
+        )
+        if run.error_code:
+            self._instruments.record_error(error_code=run.error_code, layer="workflow")
+
         if run.status is RunStatus.AWAITING_APPROVAL:
             pending = next(
                 (
@@ -504,3 +536,18 @@ def _readable(error: ErrorDetails) -> str:
     """
     location = ".".join(str(part) for part in error.get("loc", ()))
     return f"{location or 'definition'}: {error.get('msg', 'is invalid')}"
+
+
+def _elapsed_ms(run: WorkflowRun) -> float:
+    """How long this run has been going, in milliseconds.
+
+    Derived rather than stored: ``workflow_runs`` has ``started_at`` and
+    ``completed_at`` and no duration column, and adding one purely to make a
+    metric convenient would be a schema change in service of a dashboard.
+    A run that has not finished is measured to now, which is what "how long has
+    this been waiting" means.
+    """
+    if run.started_at is None:
+        return 0.0
+    end = run.completed_at or datetime.now(UTC)
+    return max((end - run.started_at).total_seconds() * 1000.0, 0.0)

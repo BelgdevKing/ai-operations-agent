@@ -28,6 +28,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.agents.cancellation import NEVER_CANCELLED, CancellationToken
 from app.core.config import Settings
+from app.observability.instruments import Instruments, NullInstruments
 from app.tools.base import AnyTool
 from app.tools.exceptions import (
     ToolApprovalRejectedError,
@@ -96,10 +97,15 @@ class ToolExecutor:
         *,
         default_timeout_seconds: float | None = None,
         policy: ToolPolicy | None = None,
+        instruments: Instruments | None = None,
     ) -> None:
         self._registry = registry
         self._settings = settings
         self._policy = policy or AllowEnabledTools()
+        # The framework measures executions; a tool does not measure itself.
+        # Keeping it here is what stops a business tool ever importing a
+        # metrics module.
+        self._instruments = instruments or NullInstruments()
         self._default_timeout = (
             default_timeout_seconds
             if default_timeout_seconds is not None
@@ -368,6 +374,16 @@ class ToolExecutor:
         from either. A tool's input and output are the tenant's business data,
         and a log file is the wrong place for a customer record.
         """
+        # Recorded beside the log, from the same values, so the two cannot
+        # disagree about what happened. The tool name is bounded by the
+        # registry; the outcome and the safety class are enums.
+        self._instruments.record_tool_execution(
+            tool=result.tool_name,
+            outcome=result.outcome.value,
+            safety=metadata.safety.value if metadata else None,
+            milliseconds=result.duration_ms,
+        )
+
         logger.info(
             "Tool execution finished",
             extra={

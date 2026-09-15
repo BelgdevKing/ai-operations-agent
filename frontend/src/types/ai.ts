@@ -250,6 +250,105 @@ export interface ApprovalDecisionRequest {
   reason?: string;
 }
 
+// -- Usage --------------------------------------------------------------------
+
+/** Tokens, as the provider reported them. */
+export interface TokenTotals {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+/**
+ * What the priced part of some usage cost.
+ *
+ * `amount` is a **string**, deliberately. The backend carries money as a
+ * decimal all the way from the price book, and parsing it into a JavaScript
+ * number here would throw that away at the last step. Format it; do not sum it
+ * in the browser.
+ */
+export interface CostResponse {
+  amount: string;
+  currency: string;
+  price_version: string;
+  priced_calls: number;
+  unpriced_calls: number;
+  unpriced_models: string[];
+}
+
+/**
+ * Usage the deployment has no price for.
+ *
+ * `amount` is null, never zero. "We do not know what this cost" and "this cost
+ * nothing" are different statements and the interface must not conflate them.
+ */
+export interface UnpricedResponse {
+  amount: null;
+  priced_calls: number;
+  unpriced_calls: number;
+  unpriced_models: string[];
+}
+
+export type UsageCost = CostResponse | UnpricedResponse;
+
+/** Whether a figure is money or an admission that there is none. */
+export function isPriced(cost: UsageCost): cost is CostResponse {
+  return cost.amount !== null;
+}
+
+/** How many of something ended in each lifecycle state. */
+export interface StatusBreakdown {
+  total: number;
+  by_status: Record<string, number>;
+}
+
+export interface ModelUsageResponse {
+  model: string;
+  calls: number;
+  tokens: TokenTotals;
+  cost: UsageCost | null;
+}
+
+export interface ToolUsageResponse {
+  tool_name: string;
+  executions: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface DailyUsageResponse {
+  day: string;
+  calls: number;
+  tokens: TokenTotals;
+}
+
+/**
+ * `GET /api/v1/ai/usage` - one organization's usage over one window.
+ *
+ * Aggregates only. There is no field here for a prompt, an answer, a tool
+ * argument, a tool result or a conversation, because the backend builds this
+ * from execution records that never held any of them.
+ */
+export interface UsageResponse {
+  organization_id: string;
+  since: string;
+  /** Exclusive. */
+  until: string;
+
+  agent_runs: StatusBreakdown;
+  workflow_runs: StatusBreakdown;
+  tool_executions: StatusBreakdown;
+  approvals: StatusBreakdown;
+
+  llm_calls: number;
+  tokens: TokenTotals;
+  cost: UsageCost;
+
+  models: ModelUsageResponse[];
+  tools: ToolUsageResponse[];
+  days: DailyUsageResponse[];
+}
+
 // -- Workflows ----------------------------------------------------------------
 
 /** `app/models/enums.py::WorkflowStatus` - the lifecycle of one version. */

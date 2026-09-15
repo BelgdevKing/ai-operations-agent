@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     auth,
     conversations,
     organizations,
+    usage,
     workflows,
 )
 
@@ -37,6 +38,8 @@ router.include_router(workflows.router, prefix="/ai/workflows", tags=["workflows
 # Approvals are their own resource rather than part of /ai. They are read and
 # decided by people, not by agents, and an approval queue outlives the run that
 # filled it - so it gets a top-level path rather than being nested under one.
+router.include_router(usage.router, prefix="/ai", tags=["usage"])
+
 router.include_router(approvals.router, prefix="/approvals", tags=["approvals"])
 
 # Singular on purpose: a request acts on exactly one organization - the

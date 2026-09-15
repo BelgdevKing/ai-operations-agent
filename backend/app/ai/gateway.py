@@ -45,6 +45,7 @@ from app.ai.providers.base import LLMProvider
 
 if TYPE_CHECKING:
     from app.core.config import Settings
+from app.observability.instruments import Instruments, NullInstruments
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ class LLMGateway:
         retry: RetryPolicy | None = None,
         sleep: Sleeper | None = None,
         jitter: Jitter | None = None,
+        instruments: Instruments | None = None,
     ) -> None:
         """Build a gateway over a provider.
 
@@ -145,14 +147,22 @@ class LLMGateway:
             sleep: Awaitable delay. Replaced in tests so they never wait.
             jitter: Returns a value in a range. Replaced in tests to make
                 backoff deterministic.
+            instruments: Where call counts, latencies and token totals are
+                recorded. The *gateway* is the right layer for this and the
+                provider adapter is not: an adapter is a transport boundary
+                for one vendor, and making it responsible for measurement
+                would mean two adapters agreeing on what a "call" is.
         """
         self._provider = provider
         self._retry = retry or RetryPolicy()
         self._sleep: Sleeper = sleep or asyncio.sleep
         self._jitter: Jitter = jitter or random.uniform
+        self._instruments = instruments or NullInstruments()
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> LLMGateway:
+    def from_settings(
+        cls, settings: Settings, *, instruments: Instruments | None = None
+    ) -> LLMGateway:
         """Build the gateway the application is configured to use.
 
         Raises:
@@ -164,7 +174,11 @@ class LLMGateway:
         # does not pull two vendor SDKs into the process.
         from app.ai.providers.registry import create_provider
 
-        return cls(create_provider(settings), retry=RetryPolicy.from_settings(settings))
+        return cls(
+            create_provider(settings),
+            retry=RetryPolicy.from_settings(settings),
+            instruments=instruments,
+        )
 
     @property
     def provider_name(self) -> str:
@@ -310,6 +324,19 @@ class LLMGateway:
 
         logger.info("LLM call succeeded", extra={"context": context})
 
+        # One successful call, however many attempts it took. A retry that then
+        # succeeded is one call and one retry, not two calls - the retry
+        # counter is what says the difference.
+        usage = response.usage if isinstance(response, LLMResponse) else None
+        self._instruments.record_llm_call(
+            model=request.model,
+            operation=operation,
+            outcome="success",
+            milliseconds=float(context["gateway_latency_ms"]),
+            input_tokens=usage.input_tokens if usage else 0,
+            output_tokens=usage.output_tokens if usage else 0,
+        )
+
     def _log_retry(
         self,
         call_id: str,
@@ -326,6 +353,7 @@ class LLMGateway:
         context["delay_seconds"] = round(delay, 3)
 
         logger.warning("LLM call failed; retrying", extra={"context": context})
+        self._instruments.record_llm_retry(error_code=error.code)
 
     def _log_failure(
         self,
@@ -344,3 +372,14 @@ class LLMGateway:
         context["gateway_latency_ms"] = round((perf_counter() - started) * 1000, 2)
 
         logger.error("LLM call failed", extra={"context": context})
+
+        # A failed call has no usage to report - the provider never answered -
+        # so tokens are omitted rather than recorded as zero. The error is
+        # counted separately, under the layer that produced it.
+        self._instruments.record_llm_call(
+            model=request.model,
+            operation=operation,
+            outcome="failed",
+            milliseconds=float(context["gateway_latency_ms"]),
+        )
+        self._instruments.record_error(error_code=error.code, layer="llm")

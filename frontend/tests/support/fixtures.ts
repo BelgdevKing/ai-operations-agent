@@ -9,6 +9,7 @@ import type {
   AgentRunResponse,
   ApprovalQueue,
   ApprovalResponse,
+  UsageResponse,
   ConversationDetail,
   GenerateResponse,
   WorkflowRunResponse,
@@ -137,6 +138,47 @@ export function awaitingApproval(): AgentRunResponse {
       requested_by: user.id,
     },
     step_count: 1,
+  };
+}
+
+/** One organization's usage, as `GET /ai/usage` reports it. */
+export function usageResponse(overrides: Partial<UsageResponse> = {}): UsageResponse {
+  return {
+    organization_id: acme.id,
+    since: "2026-06-15T00:00:00Z",
+    until: "2026-09-15T00:00:00Z",
+    agent_runs: { total: 2, by_status: { completed: 2 } },
+    workflow_runs: { total: 1, by_status: { succeeded: 1 } },
+    tool_executions: { total: 4, by_status: { succeeded: 4 } },
+    approvals: { total: 1, by_status: { approved: 1 } },
+    llm_calls: 3,
+    tokens: { input_tokens: 120, output_tokens: 60, total_tokens: 180 },
+    cost: {
+      amount: "0.052500",
+      currency: "USD",
+      price_version: "test-book",
+      priced_calls: 3,
+      unpriced_calls: 0,
+      unpriced_models: [],
+    },
+    models: [
+      {
+        model: "claude-opus-5",
+        calls: 3,
+        tokens: { input_tokens: 120, output_tokens: 60, total_tokens: 180 },
+        cost: {
+          amount: "0.052500",
+          currency: "USD",
+          price_version: "test-book",
+          priced_calls: 3,
+          unpriced_calls: 0,
+          unpriced_models: [],
+        },
+      },
+    ],
+    tools: [{ tool_name: "get_shipment", executions: 4, succeeded: 4, failed: 0 }],
+    days: [],
+    ...overrides,
   };
 }
 
