@@ -13,8 +13,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     href: "/ai",
-    label: "AI workspace",
-    description: "Ask the configured model a question.",
+    label: "Agent console",
+    description: "Supervise the agents: conversations, tool activity and execution.",
   },
   {
     href: "/approvals",
