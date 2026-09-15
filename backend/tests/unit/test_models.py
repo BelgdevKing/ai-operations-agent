@@ -17,16 +17,23 @@ from sqlalchemy.orm import configure_mappers
 
 from app.models import (
     Agent,
+    AgentRunRecord,
+    AgentStepRecord,
     AgentTool,
     Approval,
     AuditEvent,
     Base,
     Conversation,
+    Customer,
     Document,
+    Invoice,
     Message,
     Organization,
     OrganizationMember,
+    Shipment,
+    ShipmentCharge,
     Tool,
+    ToolExecutionRecord,
     User,
     Workflow,
     WorkflowRun,
@@ -49,15 +56,22 @@ from app.models.enums import (
 
 ALL_MODELS = [
     Agent,
+    AgentRunRecord,
+    AgentStepRecord,
     AgentTool,
     Approval,
     AuditEvent,
     Conversation,
+    Customer,
     Document,
+    Invoice,
     Message,
     Organization,
     OrganizationMember,
+    Shipment,
+    ShipmentCharge,
     Tool,
+    ToolExecutionRecord,
     User,
     Workflow,
     WorkflowRun,
@@ -66,8 +80,15 @@ ALL_MODELS = [
 ]
 
 EXPECTED_TABLES = {
+    "agent_runs",
+    "agent_steps",
     "agent_tools",
     "agents",
+    "tool_executions",
+    "customers",
+    "invoices",
+    "shipment_charges",
+    "shipments",
     "approvals",
     "audit_events",
     "conversations",
@@ -85,13 +106,21 @@ EXPECTED_TABLES = {
 
 # Tables that carry the tenant discriminator directly.
 TENANT_SCOPED = {
+    "agent_runs",
+    "agent_steps",
     "agents",
     "approvals",
+    "tool_executions",
     "audit_events",
     "conversations",
+    "customers",
     "documents",
+    "invoices",
     "organization_members",
+    "shipment_charges",
+    "shipments",
     "workflow_runs",
+    "workflow_step_runs",
     "workflows",
 }
 
@@ -103,7 +132,6 @@ NOT_TENANT_SCOPED = {
     "agent_tools": "reaches its tenant through the agent",
     "messages": "reaches its tenant through the conversation",
     "workflow_steps": "reaches its tenant through the workflow",
-    "workflow_step_runs": "reaches its tenant through the run",
 }
 
 
@@ -116,7 +144,7 @@ def table_of(model: type) -> Table:
 
 def test_all_models_import() -> None:
     """Every model is importable from the package root."""
-    assert len(ALL_MODELS) == 15
+    assert len(ALL_MODELS) == 22
     for model in ALL_MODELS:
         assert issubclass(model, Base)
 
@@ -180,7 +208,7 @@ def test_tenant_tables_have_a_non_null_indexed_organization_id(table_name: str) 
     assert column.nullable is False, "a tenant-owned row must always have an owner"
 
     targets = {fk.column.table.name for fk in column.foreign_keys}
-    assert targets == {"organizations"}
+    assert "organizations" in targets, "the tenant column must point at the tenant"
 
     indexed = any(next(iter(index.columns)).name == "organization_id" for index in table.indexes)
     assert indexed, f"{table_name}.organization_id must lead an index"
@@ -200,8 +228,41 @@ def test_tenant_scoping_covers_every_table() -> None:
 def test_organization_cascade_removes_tenant_data() -> None:
     for table_name in TENANT_SCOPED:
         column = Base.metadata.tables[table_name].c.organization_id
-        fk = next(iter(column.foreign_keys))
-        assert fk.ondelete == "CASCADE", table_name
+        # By name rather than "the first one": a business table's tenant column
+        # also participates in a composite key to its parent, so picking an
+        # arbitrary foreign key would test whichever one happened to come out.
+        to_organizations = next(
+            fk for fk in column.foreign_keys if fk.column.table.name == "organizations"
+        )
+        assert to_organizations.ondelete == "CASCADE", table_name
+
+
+def test_a_composite_key_on_a_tenant_table_carries_the_tenant() -> None:
+    """The business tables relate to each other through the organization.
+
+    Where ``organization_id`` appears inside a multi-column foreign key, that
+    key must reference the parent's ``organization_id`` too. Without it a child
+    could be attached to another tenant's parent, and a scoped join would then
+    return one organization's row to another.
+    """
+    checked = 0
+
+    for table_name in sorted(TENANT_SCOPED):
+        table = Base.metadata.tables[table_name]
+
+        for constraint in table.foreign_key_constraints:
+            columns = {column.name for column in constraint.columns}
+            if len(columns) < 2 or "organization_id" not in columns:
+                continue
+
+            referred = {element.column.name for element in constraint.elements}
+            assert "organization_id" in referred, (
+                f"{table_name}.{sorted(columns)} must reference the parent's "
+                "organization_id, or it would allow a cross-tenant relationship"
+            )
+            checked += 1
+
+    assert checked >= 4, "the business tables should be related this way"
 
 
 # -- Timestamps ---------------------------------------------------------------
@@ -217,7 +278,10 @@ def test_every_table_has_a_timezone_aware_created_at() -> None:
 
 
 def test_mutable_tables_have_updated_at_and_append_only_ones_do_not() -> None:
-    append_only = {"messages", "audit_events", "agent_tools"}
+    # A step is written once and never revised: what a model call decided does
+    # not change afterwards. A run and a tool execution both do change - that is
+    # the whole point of a durable record you can resume.
+    append_only = {"messages", "audit_events", "agent_tools", "agent_steps"}
 
     for name, table in Base.metadata.tables.items():
         if name in append_only:
@@ -362,9 +426,19 @@ def test_a_user_holds_one_membership_per_organization() -> None:
 
 
 def test_names_are_unique_within_an_organization_not_across_them() -> None:
-    for model in (Agent, Workflow):
-        assert frozenset({"organization_id", "name"}) in unique_column_sets(model)
-        assert frozenset({"name"}) not in unique_column_sets(model)
+    assert frozenset({"organization_id", "name"}) in unique_column_sets(Agent)
+    assert frozenset({"name"}) not in unique_column_sets(Agent)
+
+
+def test_a_workflow_name_is_unique_per_version_within_an_organization() -> None:
+    """A name identifies a procedure; a version identifies which edition of it.
+
+    Both together are what must be unique - otherwise a second edition of a
+    workflow could not exist, which is the whole point of versioning.
+    """
+    assert frozenset({"organization_id", "name", "version"}) in unique_column_sets(Workflow)
+    assert frozenset({"organization_id", "name"}) not in unique_column_sets(Workflow)
+    assert frozenset({"name"}) not in unique_column_sets(Workflow)
 
 
 def test_workflow_step_order_is_unique_within_a_workflow() -> None:
@@ -510,20 +584,39 @@ def test_agent_tool_link_is_many_to_many_through_agent_tools() -> None:
 
 
 def test_messages_load_in_a_deterministic_order() -> None:
-    """created_at alone is not enough: now() is constant per transaction."""
+    """A conversation's order has to be a total order.
+
+    ``created_at`` alone is not one - now() is constant per transaction - and
+    tie-breaking it with a random primary key makes the result deterministic
+    without making it *right*. Position leads; the rest is a fallback for rows
+    written before the column existed.
+    """
     configure_mappers()
     order_by = Conversation.__mapper__.relationships["messages"].order_by
 
-    assert [clause.name for clause in order_by] == ["created_at", "id"]
+    assert [clause.name for clause in order_by] == ["sequence", "created_at", "id"]
+
+
+def test_the_audit_trail_advances_within_a_transaction() -> None:
+    """One unit of work writes several events, and their order is the record.
+
+    ``now()`` would give them all the same timestamp, leaving "did the approval
+    come before the run finished?" to a random primary key.
+    """
+    column = Base.metadata.tables["audit_events"].c.created_at
+
+    assert "clock_timestamp" in str(column.server_default.arg).lower()
 
 
 def test_owned_children_are_deleted_with_their_parent() -> None:
     configure_mappers()
+    # WorkflowRun.step_runs is deliberately absent: it became read-only when a
+    # step run gained its own tenant column, and the database removes the rows
+    # through the composite key's ON DELETE CASCADE rather than through the ORM.
     for model, attribute in (
         (Organization, "members"),
         (Conversation, "messages"),
         (Workflow, "steps"),
-        (WorkflowRun, "step_runs"),
     ):
         relationship = model.__mapper__.relationships[attribute]  # type: ignore[attr-defined]
         assert relationship.cascade.delete_orphan

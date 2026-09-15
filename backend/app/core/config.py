@@ -24,6 +24,32 @@ JWTAlgorithm = Literal["HS256", "HS384", "HS512"]
 # Deliberately obvious. Never use this outside local development.
 DEV_JWT_SECRET_KEY = "dev-only-insecure-jwt-secret-change-me"
 
+# Hard ceilings on the agent runtime. A deployment may be stricter than these;
+# it may not be more permissive, so a misconfigured environment variable cannot
+# turn one request into an unbounded spend. Mirrored in app/agents/models.py,
+# which cannot import this module without a cycle.
+MAX_AGENT_STEPS = 32
+MAX_AGENT_OUTPUT_TOKENS = 8_192
+
+# A tool may not be given an unbounded deadline by configuration either.
+MAX_TOOL_TIMEOUT_SECONDS = 300.0
+
+# How long an unfinished agent run may sit untouched before the abandonment
+# sweep gives up on it. A ceiling rather than a preference: a deployment that
+# set this to a week would keep failed runs holding their idempotency keys for a
+# week, and nothing is recoverable after a day that was not recoverable after an
+# hour. The floor stops a misconfiguration sweeping runs that are simply slow.
+MIN_AGENT_RUN_STALE_SECONDS = 60
+MAX_AGENT_RUN_STALE_SECONDS = 86_400
+
+# Ceilings on a workflow definition. A definition is written by a user of the
+# platform, so every one of these is a limit on what somebody else's document
+# may cost this deployment: how many steps it may contain, how much the document
+# itself may weigh, and how much data it may carry between steps.
+MAX_WORKFLOW_STEPS = 64
+MAX_WORKFLOW_DEFINITION_BYTES = 262_144
+MAX_WORKFLOW_PAYLOAD_BYTES = 262_144
+
 # Which vendor serves model calls. Only the selected one needs a credential.
 LLMProviderName = Literal["anthropic", "openai"]
 
@@ -143,6 +169,123 @@ class Settings(BaseSettings):
     # only the configured model is allowed, which is the safe default: without
     # it a client could name an expensive model and bill the deployment for it.
     llm_allowed_models: str = ""
+
+    # -- Agent runtime ---------------------------------------------------------
+    #
+    # Every limit a run obeys comes from here. None of them is reachable from a
+    # request: an agent's configuration is the server's, so a caller can neither
+    # widen a budget nor spend more of someone else's money than this allows.
+    agent_max_steps: int = Field(
+        default=4,
+        ge=0,
+        le=MAX_AGENT_STEPS,
+        description="Model calls one run may make. The runtime stops with an "
+        "error rather than looping past it.",
+    )
+    agent_max_output_tokens: int = Field(
+        default=2_048,
+        ge=1,
+        le=MAX_AGENT_OUTPUT_TOKENS,
+        description="Ceiling on what one step may generate.",
+    )
+    agent_max_messages: int = Field(
+        default=50,
+        ge=1,
+        description="Conversation turns one run accepts, the system prompt aside.",
+    )
+    agent_max_conversation_characters: int = Field(
+        default=50_000,
+        ge=1,
+        description="Total size of the conversation handed to a run.",
+    )
+    agent_run_stale_after_seconds: int = Field(
+        default=900,
+        ge=MIN_AGENT_RUN_STALE_SECONDS,
+        le=MAX_AGENT_RUN_STALE_SECONDS,
+        description="How long a pending or running agent run may go without "
+        "progress before it is marked failed with agent_run_abandoned. There is "
+        "no background worker, so a run whose request died has nothing to "
+        "continue it; mid-execution resume is deliberately not attempted. Runs "
+        "awaiting approval are never swept - they are paused on purpose.",
+    )
+
+    # -- Workflow engine -------------------------------------------------------
+    #
+    # A workflow definition is data somebody wrote, so every limit here bounds
+    # what one document may do to a request. None of them is reachable from a
+    # definition or from a run's input.
+    workflow_max_steps: int = Field(
+        default=32,
+        ge=1,
+        le=MAX_WORKFLOW_STEPS,
+        description="Steps one definition may contain. Checked at activation, "
+        "so an oversized workflow is refused before anybody can start it.",
+    )
+    workflow_max_executed_steps: int = Field(
+        default=32,
+        ge=1,
+        le=MAX_WORKFLOW_STEPS,
+        description="Steps one run may execute. The graph is validated acyclic, "
+        "so this should never be reached; it is the guard that makes 'should' "
+        "unnecessary.",
+    )
+    workflow_max_definition_bytes: int = Field(
+        default=65_536,
+        ge=1,
+        le=MAX_WORKFLOW_DEFINITION_BYTES,
+        description="Serialised size of one definition document.",
+    )
+    workflow_max_input_bytes: int = Field(
+        default=16_384,
+        ge=1,
+        le=MAX_WORKFLOW_PAYLOAD_BYTES,
+        description="Serialised size of the input one run may be started with. "
+        "Workflow input is untrusted, and this is the first thing that bounds it.",
+    )
+    workflow_max_output_bytes: int = Field(
+        default=65_536,
+        ge=1,
+        le=MAX_WORKFLOW_PAYLOAD_BYTES,
+        description="Serialised size of what one step may produce. A larger "
+        "result is refused rather than truncated: a silently shortened result "
+        "is one a later condition would branch on without anybody knowing.",
+    )
+    workflow_max_input_depth: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        description="How deeply nested workflow input may be. A deeply nested "
+        "payload is cheap to send and expensive to walk.",
+    )
+    workflow_run_stale_after_seconds: int = Field(
+        default=900,
+        ge=MIN_AGENT_RUN_STALE_SECONDS,
+        le=MAX_AGENT_RUN_STALE_SECONDS,
+        description="How long a pending or running workflow run may go without "
+        "progress before it is marked failed with workflow_run_abandoned. The "
+        "same reasoning as the agent runtime's: there is no background worker, "
+        "and a run whose request died has nothing to continue it. Runs awaiting "
+        "approval are never swept.",
+    )
+
+    # -- Tool framework --------------------------------------------------------
+    #
+    # A tool talks to systems outside this process, so both limits below exist
+    # to stop one slow or chatty dependency holding a request open or filling a
+    # conversation with a database dump.
+    tool_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=MAX_TOOL_TIMEOUT_SECONDS,
+        description="Deadline for one tool execution, unless the tool sets a "
+        "shorter one of its own. The framework never waives it.",
+    )
+    tool_max_result_bytes: int = Field(
+        default=32_768,
+        ge=1,
+        description="Ceiling on a serialised tool result. A larger one is "
+        "refused rather than truncated, so nothing silently loses data.",
+    )
 
     @field_validator("log_level")
     @classmethod

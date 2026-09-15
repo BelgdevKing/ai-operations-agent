@@ -32,6 +32,8 @@ from fastapi import Depends, Header, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.registry import AgentRegistry
+from app.agents.runtime import AgentRuntime
 from app.ai.gateway import LLMGateway
 from app.core.config import Settings
 from app.core.database import get_session
@@ -42,10 +44,16 @@ from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
 from app.repositories.membership import MembershipLookup
 from app.repositories.user import UserRepository
+from app.services.agent_execution import AgentExecutionService, RunView
 from app.services.ai import AIService
+from app.services.approvals import ApprovalService
 from app.services.auth import AuthService
 from app.services.health import HealthService
 from app.services.membership import MembershipService
+from app.services.workflow_execution import WorkflowService
+from app.tools.business import build_business_registry
+from app.tools.executor import ToolExecutor
+from app.tools.registry import ToolRegistry
 
 ORGANIZATION_HEADER = "X-Organization-ID"
 
@@ -302,6 +310,232 @@ def get_ai_service(gateway: LLMGatewayDep, settings: SettingsDep) -> AIService:
 
 AIServiceDep = Annotated[AIService, Depends(get_ai_service)]
 """Application-level model access. Endpoints depend on this, never on a provider."""
+
+
+def get_agent_registry(request: Request, settings: SettingsDep) -> AgentRegistry:
+    """The deployment's agents, built once and reused.
+
+    Cached on application state for the same reason the gateway is: each
+    application ``create_app`` builds - including each one a test builds - gets
+    its own, and a test that registers an agent cannot leak it into another.
+    """
+    registry: AgentRegistry | None = getattr(request.app.state, "agent_registry", None)
+    if registry is None:
+        registry = AgentRegistry.from_settings(settings)
+        request.app.state.agent_registry = registry
+    return registry
+
+
+AgentRegistryDep = Annotated[AgentRegistry, Depends(get_agent_registry)]
+"""The agents this deployment offers."""
+
+
+def get_tool_registry(session: SessionDep) -> ToolRegistry:
+    """The tools this deployment has, built for this request.
+
+    Per request rather than cached on application state, unlike the agent
+    registry. The business tools read the database, so each one is bound to the
+    session this request is already using - which keeps a tool inside the
+    caller's transaction instead of opening a second one that cannot see it.
+
+    Constructing four small objects per request is not a cost worth optimising
+    away; sharing a session across requests would be a correctness bug.
+    """
+    return build_business_registry(session)
+
+
+ToolRegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
+"""The tools this deployment offers."""
+
+
+def get_tool_executor(registry: ToolRegistryDep, settings: SettingsDep) -> ToolExecutor:
+    return ToolExecutor(registry, settings)
+
+
+ToolExecutorDep = Annotated[ToolExecutor, Depends(get_tool_executor)]
+"""The controlled boundary every tool call passes through."""
+
+
+def get_agent_runtime(
+    gateway: LLMGatewayDep,
+    registry: AgentRegistryDep,
+    settings: SettingsDep,
+    tools: ToolExecutorDep,
+) -> AgentRuntime:
+    return AgentRuntime(gateway, registry, settings, tools)
+
+
+AgentRuntimeDep = Annotated[AgentRuntime, Depends(get_agent_runtime)]
+"""Controlled agent execution. Endpoints depend on this, never on a provider."""
+
+
+def get_agent_execution_service(
+    session: SessionDep,
+    membership: CurrentMembership,
+    settings: SettingsDep,
+    runtime: AgentRuntimeDep,
+    registry: ToolRegistryDep,
+) -> AgentExecutionService:
+    """Durable agent execution, fixed to the caller's organization.
+
+    ``membership`` is declared before ``runtime`` on purpose, and the same
+    ordering appears on every endpoint that uses this. FastAPI resolves
+    dependencies in order and the LLM gateway is built on first use, so
+    authorizing first is what keeps a provider misconfiguration from answering an
+    anonymous caller with a 500 where a 401 belongs.
+    """
+    return AgentExecutionService(session, runtime, settings, membership, registry)
+
+
+AgentExecutionServiceDep = Annotated[AgentExecutionService, Depends(get_agent_execution_service)]
+"""Durable runs, stored conversations, and the idempotency guarantee."""
+
+
+def resolve_llm_gateway(request: Request, settings: Settings) -> LLMGateway:
+    """The application's gateway, for the places that build one on demand.
+
+    Two services deliberately do *not* take the gateway as a dependency, because
+    building it fails without a provider credential and most of what they do
+    never touches a model. They resolve it here instead, when they actually need
+    one.
+
+    That means stepping outside FastAPI's dependency graph, so this consults the
+    override table itself. Without that, an application whose gateway has been
+    replaced - which is how every test puts a scripted provider behind it -
+    would quietly get the real one back at exactly the moment it mattered.
+    """
+    override = request.app.dependency_overrides.get(get_llm_gateway)
+    if override is not None:
+        gateway: LLMGateway = override()
+        return gateway
+    return get_llm_gateway(request, settings)
+
+
+class LazyAgentStepRunner:
+    """The agent execution service, built only if a workflow step needs one.
+
+    Most workflow work never touches a model: drafting a definition, activating
+    it, listing runs, reading steps, and running a workflow made of tool and
+    condition steps. Building the LLM gateway eagerly would make every one of
+    those fail on a deployment that has no provider credential - a 500 about a
+    provider, answering a request that never wanted one.
+
+    So the gateway is resolved here, on the first agent step, through the same
+    cached dependency the AI endpoints use. A deployment without a credential
+    can therefore manage and run workflows, and an *agent* step in one still
+    fails with the configuration error it should.
+    """
+
+    def __init__(
+        self,
+        request: Request,
+        session: AsyncSession,
+        settings: Settings,
+        membership: OrganizationMember,
+        executor: ToolExecutor,
+        registry: ToolRegistry,
+    ) -> None:
+        self._request = request
+        self._session = session
+        self._settings = settings
+        self._membership = membership
+        self._executor = executor
+        self._registry = registry
+        self._service: AgentExecutionService | None = None
+
+    def _resolve(self) -> AgentExecutionService:
+        if self._service is None:
+            gateway = resolve_llm_gateway(self._request, self._settings)
+            runtime = AgentRuntime(
+                gateway,
+                get_agent_registry(self._request, self._settings),
+                self._settings,
+                self._executor,
+            )
+            self._service = AgentExecutionService(
+                self._session, runtime, self._settings, self._membership, self._registry
+            )
+        return self._service
+
+    async def run_for_workflow(
+        self, *, agent_id: str, message: str, idempotency_key: str, request_id: str | None
+    ) -> RunView:
+        return await self._resolve().run_for_workflow(
+            agent_id=agent_id,
+            message=message,
+            idempotency_key=idempotency_key,
+            request_id=request_id,
+        )
+
+    async def get(self, run_id: uuid.UUID) -> RunView:
+        return await self._resolve().get(run_id)
+
+
+def get_workflow_service(
+    request: Request,
+    session: SessionDep,
+    membership: CurrentMembership,
+    settings: SettingsDep,
+    executor: ToolExecutorDep,
+    registry: ToolRegistryDep,
+    agents: AgentRegistryDep,
+) -> WorkflowService:
+    """Workflow definitions and runs, fixed to the caller's organization.
+
+    It is handed the *existing* tool executor and a lazily-built handle on the
+    *existing* agent execution service rather than anything of its own: a
+    workflow orchestrates what the platform can already do, and a second runtime
+    or a second executor is the thing this design exists to not have.
+    """
+    return WorkflowService(
+        session,
+        settings,
+        membership,
+        tools=executor,
+        registry=registry,
+        agents=LazyAgentStepRunner(request, session, settings, membership, executor, registry),
+        agent_registry=agents,
+    )
+
+
+WorkflowServiceDep = Annotated[WorkflowService, Depends(get_workflow_service)]
+"""Workflow definitions, durable runs, and the engine that drives them."""
+
+
+def get_approval_service(
+    request: Request,
+    session: SessionDep,
+    membership: CurrentMembership,
+    settings: SettingsDep,
+    executor: ToolExecutorDep,
+    registry: ToolRegistryDep,
+    workflows: WorkflowServiceDep,
+) -> ApprovalService:
+    """Reading and deciding approvals, fixed to the caller's organization.
+
+    Building the service does not authorise anything: whether this caller may
+    *decide* is settled by the role dependency on the endpoint, which is the
+    security boundary. A member may hold one of these and only ever read.
+
+    The workflow service comes in because a decision resumes whatever was
+    waiting - an agent run, a workflow run, or both when an agent step inside a
+    workflow paused. One approval subsystem, two kinds of process.
+    """
+
+    def runtime() -> AgentRuntime:
+        """The agent runtime, built only if an agent run has to be resumed."""
+        return AgentRuntime(
+            resolve_llm_gateway(request, settings),
+            get_agent_registry(request, settings),
+            settings,
+            executor,
+        )
+
+    return ApprovalService(session, runtime, settings, membership, executor, registry, workflows)
+
+
+ApprovalServiceDep = Annotated[ApprovalService, Depends(get_approval_service)]
+"""The approval queue, and the decisions that resume a paused run."""
 
 
 def get_membership_service(session: SessionDep, membership: CurrentMembership) -> MembershipService:

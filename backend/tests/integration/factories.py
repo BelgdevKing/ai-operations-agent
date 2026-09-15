@@ -21,6 +21,7 @@ from app.models import (
     Workflow,
     WorkflowRun,
     WorkflowStep,
+    WorkflowStepRun,
 )
 from app.models.enums import MemberRole, WorkflowStepType
 
@@ -136,13 +137,51 @@ async def make_step(
 
 
 async def make_run(
-    session: AsyncSession, workflow: Workflow, organization: Organization, **kwargs: Any
+    session: AsyncSession,
+    workflow: Workflow,
+    organization: Organization,
+    user: User | None = None,
+    **kwargs: Any,
 ) -> WorkflowRun:
+    """One workflow run.
+
+    A run records who started it and which edition of the workflow it follows,
+    so the factory needs a user; one is created when the caller does not care
+    which.
+    """
+    if user is None:
+        user = await make_user(session)
+
     run = WorkflowRun(
         workflow_id=workflow.id,
         organization_id=organization.id,
+        user_id=user.id,
+        workflow_version=kwargs.pop("workflow_version", workflow.version),
         **kwargs,
     )
     session.add(run)
     await session.flush()
     return run
+
+
+async def make_step_run(
+    session: AsyncSession,
+    run: WorkflowRun,
+    *,
+    step_key: str = "only",
+    step_type: WorkflowStepType = WorkflowStepType.TOOL_CALL,
+    position: int = 1,
+    **kwargs: Any,
+) -> WorkflowStepRun:
+    """One step of a run, with the columns the engine always sets."""
+    step_run = WorkflowStepRun(
+        organization_id=run.organization_id,
+        workflow_run_id=run.id,
+        step_key=step_key,
+        step_type=step_type,
+        position=position,
+        **kwargs,
+    )
+    session.add(step_run)
+    await session.flush()
+    return step_run

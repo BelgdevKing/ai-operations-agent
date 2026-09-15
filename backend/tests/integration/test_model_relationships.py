@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -41,6 +42,7 @@ from tests.integration.factories import (
     make_organization,
     make_run,
     make_step,
+    make_step_run,
     make_tool,
     make_user,
     make_workflow,
@@ -311,19 +313,16 @@ async def test_step_configuration_stores_structured_json(session: AsyncSession) 
 async def test_a_run_links_to_its_workflow_and_step_runs(session: AsyncSession) -> None:
     organization = await make_organization(session)
     workflow = await make_workflow(session, organization)
-    step = await make_step(session, workflow, 0)
     run = await make_run(session, workflow, organization, status=RunStatus.RUNNING)
 
-    session.add(
-        WorkflowStepRun(
-            workflow_run_id=run.id,
-            workflow_step_id=step.id,
-            status=StepRunStatus.SUCCEEDED,
-            input_data={"query": "pending refunds"},
-            output_data={"count": 4},
-        )
+    await make_step_run(
+        session,
+        run,
+        step_key="search",
+        status=StepRunStatus.SUCCEEDED,
+        input_data={"query": "pending refunds"},
+        output_data={"count": 4},
     )
-    await session.flush()
     await session.refresh(run, ["workflow", "step_runs"])
 
     assert run.workflow.id == workflow.id
@@ -335,18 +334,17 @@ async def test_step_run_data_distinguishes_absent_from_empty(session: AsyncSessi
     """A resumed run needs to tell 'not started' from 'produced nothing'."""
     organization = await make_organization(session)
     workflow = await make_workflow(session, organization)
-    step = await make_step(session, workflow, 0)
     run = await make_run(session, workflow, organization)
 
-    pending = WorkflowStepRun(workflow_run_id=run.id, workflow_step_id=step.id)
-    finished = WorkflowStepRun(
-        workflow_run_id=run.id,
-        workflow_step_id=step.id,
+    pending = await make_step_run(session, run, step_key="first", position=1)
+    finished = await make_step_run(
+        session,
+        run,
+        step_key="second",
+        position=2,
         status=StepRunStatus.SUCCEEDED,
         output_data={},
     )
-    session.add_all([pending, finished])
-    await session.flush()
     await session.refresh(pending)
     await session.refresh(finished)
 
@@ -354,32 +352,27 @@ async def test_step_run_data_distinguishes_absent_from_empty(session: AsyncSessi
     assert finished.output_data == {}
 
 
-async def test_a_step_may_be_retried_within_one_run(session: AsyncSession) -> None:
-    """Attempts are separate rows, so the history stays complete."""
+async def test_a_step_cannot_run_twice_within_one_run(session: AsyncSession) -> None:
+    """One row per step, enforced by the database.
+
+    The schema phase allowed an attempt per row, on the assumption that a step
+    would be retried. The workflow engine does not retry: a tool that changes
+    something must not be re-run on a guess, and the tool framework already
+    decides what is safe to repeat. So a second row for the same step could only
+    ever mean the same work happened twice, and the constraint makes that
+    impossible rather than unlikely.
+    """
     organization = await make_organization(session)
     workflow = await make_workflow(session, organization)
-    step = await make_step(session, workflow, 0)
     run = await make_run(session, workflow, organization)
 
-    session.add_all(
-        [
-            WorkflowStepRun(
-                workflow_run_id=run.id,
-                workflow_step_id=step.id,
-                status=StepRunStatus.FAILED,
-                error_message="timeout",
-            ),
-            WorkflowStepRun(
-                workflow_run_id=run.id,
-                workflow_step_id=step.id,
-                status=StepRunStatus.SUCCEEDED,
-            ),
-        ]
-    )
-    await session.flush()
-    await session.refresh(run, ["step_runs"])
+    await make_step_run(session, run, step_key="act", position=1, status=StepRunStatus.FAILED)
 
-    assert len(run.step_runs) == 2
+    with pytest.raises(IntegrityError) as caught:
+        await make_step_run(session, run, step_key="act", position=2)
+
+    assert "uq_workflow_step_runs_run_id_step_key" in str(caught.value)
+    await session.rollback()
 
 
 async def test_deleting_a_workflow_removes_its_steps_and_runs(session: AsyncSession) -> None:
@@ -387,14 +380,14 @@ async def test_deleting_a_workflow_removes_its_steps_and_runs(session: AsyncSess
     workflow = await make_workflow(session, organization)
     step = await make_step(session, workflow, 0)
     run = await make_run(session, workflow, organization)
-    session.add(WorkflowStepRun(workflow_run_id=run.id, workflow_step_id=step.id))
+    await make_step_run(session, run)
     await session.commit()
 
     await session.delete(workflow)
     await session.flush()
 
     for model, column, value in (
-        (WorkflowStep, WorkflowStep.workflow_id, workflow.id),
+        (WorkflowStep, WorkflowStep.id, step.id),
         (WorkflowRun, WorkflowRun.workflow_id, workflow.id),
         (WorkflowStepRun, WorkflowStepRun.workflow_run_id, run.id),
     ):

@@ -153,8 +153,13 @@ class AnthropicProvider(LLMProvider):
         arguments: dict[str, Any] = {
             "model": request.model,
             "max_tokens": request.max_output_tokens,
+            # transport_role/transport_content rather than the raw fields: a
+            # tool turn is conveyed as a user turn, because the Messages API
+            # will not accept a tool_result block without a tool_use it issued
+            # itself, and this architecture decides through structured output
+            # instead of provider tool calling.
             "messages": [
-                {"role": message.role.value, "content": message.content}
+                {"role": message.transport_role.value, "content": message.transport_content}
                 for message in request.conversation_messages
             ],
         }

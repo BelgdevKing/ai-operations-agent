@@ -16,7 +16,7 @@ Two things the request cannot do, both enforced rather than documented:
 
 from __future__ import annotations
 
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -44,7 +44,9 @@ class AIMessage(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    role: LLMRole = Field(description="system, user or assistant.")
+    role: Literal[LLMRole.SYSTEM, LLMRole.USER, LLMRole.ASSISTANT] = Field(
+        description="system, user or assistant.",
+    )
     content: str = Field(
         min_length=1,
         max_length=MAX_MESSAGE_CHARACTERS,

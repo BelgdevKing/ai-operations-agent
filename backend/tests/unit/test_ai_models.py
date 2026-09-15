@@ -17,6 +17,7 @@ from app.ai.models import (
     LLMResponse,
     LLMRole,
     LLMStructuredResponse,
+    LLMToolResult,
     LLMUsage,
 )
 
@@ -33,8 +34,8 @@ def a_request(**overrides: object) -> LLMRequest:
 # -- LLMRole ------------------------------------------------------------------
 
 
-def test_roles_are_system_user_assistant() -> None:
-    assert {role.value for role in LLMRole} == {"system", "user", "assistant"}
+def test_roles_are_system_user_assistant_and_tool() -> None:
+    assert {role.value for role in LLMRole} == {"system", "user", "assistant", "tool"}
 
 
 def test_roles_compare_equal_to_their_string() -> None:
@@ -42,21 +43,44 @@ def test_roles_compare_equal_to_their_string() -> None:
     assert LLMRole.USER == "user"
 
 
-def test_tool_is_not_a_role_yet() -> None:
-    """Tool results are out of scope until tool execution exists; the database
-    enum carries 'tool' but this abstraction deliberately does not."""
-    assert not hasattr(LLMRole, "TOOL")
+def test_a_tool_turn_is_conveyed_as_a_user_turn() -> None:
+    """Neither provider accepts a native tool message without a tool-call block
+    it issued itself, and this architecture decides through structured output
+    instead. The mapping lives on the message so both adapters agree."""
+    result = LLMToolResult(
+        tool_name="get_shipment", execution_id="e1", succeeded=True, outcome="succeeded"
+    )
+    message = LLMMessage.tool_result(result)
+
+    assert message.role is LLMRole.TOOL
+    assert message.transport_role is LLMRole.USER
 
 
 # -- LLMMessage ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("role", list(LLMRole))
-def test_a_message_accepts_every_role(role: LLMRole) -> None:
+@pytest.mark.parametrize("role", [LLMRole.SYSTEM, LLMRole.USER, LLMRole.ASSISTANT])
+def test_a_message_accepts_every_conversational_role(role: LLMRole) -> None:
     message = LLMMessage(role=role, content="text")
 
     assert message.role is role
     assert message.content == "text"
+    assert message.transport_role is role, "only a tool turn is remapped"
+
+
+def test_a_tool_message_must_carry_a_result() -> None:
+    """Otherwise an adapter would have nothing to render."""
+    with pytest.raises(ValidationError):
+        LLMMessage(role=LLMRole.TOOL, content="text")
+
+
+def test_only_a_tool_message_may_carry_a_result() -> None:
+    result = LLMToolResult(
+        tool_name="get_shipment", execution_id="e1", succeeded=True, outcome="succeeded"
+    )
+
+    with pytest.raises(ValidationError):
+        LLMMessage(role=LLMRole.USER, content="text", tool=result)
 
 
 def test_a_role_may_be_given_as_a_string() -> None:

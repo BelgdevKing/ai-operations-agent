@@ -21,8 +21,10 @@ omissions otherwise:
 from __future__ import annotations
 
 import enum
+import json
+from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 # Widest range any supported provider accepts. Individual providers accept
 # narrower ranges; the adapter rejects a value its own API cannot take, rather
@@ -38,14 +40,78 @@ class LLMRole(enum.StrEnum):
     """Who authored a message.
 
     Distinct from ``app.models.enums.MessageRole``, which is the persisted
-    conversation role and also carries ``tool``. Tool results are not part of
-    this abstraction yet, and coupling the request format to a database enum
-    would mean a schema change every time a provider adds a role.
+    conversation role: this one describes a request being built, and coupling
+    the two would mean a schema change every time a provider adds a role.
+
+    ``TOOL`` carries what a tool did, so an agent can hand a result back to the
+    model and ask what to do next. It is provider-independent on purpose - see
+    :class:`LLMToolResult`.
     """
 
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
+class LLMToolResult(BaseModel):
+    """What a tool did, in terms no provider is involved in.
+
+    Deliberately not the tool framework's own ``ToolResult``: importing that
+    here would point the AI layer at the tool layer, which already points back
+    at the agent layer, and the agent layer points here. The agent runtime
+    translates between the two, which is the only place that knows both.
+
+    Carries what a model needs to reason about the step - which tool ran, which
+    execution it was, whether it worked, and the structured answer or the
+    reason it did not.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tool_name: str = Field(min_length=1, max_length=64)
+    execution_id: str = Field(
+        min_length=1,
+        max_length=64,
+        description="Identifies this execution, so the model can tell two calls "
+        "of the same tool apart.",
+    )
+    succeeded: bool
+    outcome: str = Field(
+        min_length=1,
+        max_length=64,
+        description="The framework's own verdict, e.g. succeeded, not_found, "
+        "approval_required. Lets the model distinguish 'no such shipment' from "
+        "'that failed'.",
+    )
+    data: dict[str, Any] | None = Field(
+        default=None, description="The tool's validated output, when it succeeded."
+    )
+    error: str | None = Field(
+        default=None,
+        max_length=2_000,
+        description="Why it did not succeed. Already sanitised by the tool "
+        "framework - never a provider's or a driver's own text.",
+    )
+
+    def render(self) -> str:
+        """The text form a provider actually receives.
+
+        Delimited and labelled so the boundary is legible in the transcript:
+        everything between the markers is *data that a tool returned*, not an
+        instruction from anybody. A model cannot be made to honour that by
+        formatting alone - the real protection is that nothing in here can
+        reach the tool framework - but an unmarked blob of business text would
+        not even make the distinction visible.
+        """
+        verdict = "succeeded" if self.succeeded else f"failed ({self.outcome})"
+
+        body = json.dumps(self.data, ensure_ascii=False, sort_keys=True, default=str)
+        if not self.succeeded:
+            body = self.error or "No further detail."
+
+        header = f"[tool result: {self.tool_name} #{self.execution_id} {verdict}]"
+        return "\n".join([header, body, "[end tool result]"])
 
 
 class LLMMessage(BaseModel):
@@ -60,6 +126,41 @@ class LLMMessage(BaseModel):
         "treats it as an error, and failing here gives a better message than "
         "the provider's.",
     )
+    tool: LLMToolResult | None = Field(
+        default=None,
+        description="Present on, and only on, a tool message.",
+    )
+
+    @model_validator(mode="after")
+    def _tool_payload_matches_the_role(self) -> Self:
+        """A tool message carries a result; nothing else does.
+
+        Checked rather than trusted, because an adapter reading ``tool`` on a
+        message that is not a tool turn - or finding nothing on one that is -
+        would have no sensible behaviour to fall back on.
+        """
+        if self.role is LLMRole.TOOL and self.tool is None:
+            raise ValueError("A tool message must carry a tool result.")
+        if self.role is not LLMRole.TOOL and self.tool is not None:
+            raise ValueError("Only a tool message may carry a tool result.")
+        return self
+
+    @property
+    def transport_role(self) -> LLMRole:
+        """The role a provider is actually sent.
+
+        A tool turn goes as a user turn. Neither provider will accept a native
+        tool message without a tool-call block it issued itself, and this
+        architecture deliberately does not use provider tool calling - the
+        model decides through structured output instead. Mapping it here rather
+        than in each adapter keeps the two from drifting.
+        """
+        return LLMRole.USER if self.role is LLMRole.TOOL else self.role
+
+    @property
+    def transport_content(self) -> str:
+        """The text a provider is actually sent."""
+        return self.tool.render() if self.tool is not None else self.content
 
     @classmethod
     def system(cls, content: str) -> LLMMessage:
@@ -75,6 +176,16 @@ class LLMMessage(BaseModel):
     def assistant(cls, content: str) -> LLMMessage:
         """Convenience constructor for an assistant turn."""
         return cls(role=LLMRole.ASSISTANT, content=content)
+
+    @classmethod
+    def tool_result(cls, result: LLMToolResult) -> LLMMessage:
+        """A turn carrying what a tool did.
+
+        ``content`` mirrors the rendered form so that anything reading the
+        message as plain text - a log, a test, a future transcript - sees the
+        same thing the provider will.
+        """
+        return cls(role=LLMRole.TOOL, content=result.render(), tool=result)
 
 
 class LLMRequest(BaseModel):

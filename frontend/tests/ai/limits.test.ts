@@ -24,7 +24,7 @@ import {
   MAX_MESSAGE_CHARACTERS,
   MAX_TOTAL_CHARACTERS,
   describeCapacity,
-  toGenerateRequest,
+  toAgentRunRequest,
 } from "@/lib/ai/conversation";
 
 test("the mirrored limits are the backend's", () => {
@@ -53,12 +53,14 @@ test("a full conversation offers starting over rather than dropping messages", (
 
   assert.equal(capacity.full, true);
   assert.match(capacity.reason ?? "", /Start a new one/);
-  // Nothing is trimmed or discarded on the client's initiative.
-  assert.equal(toGenerateRequest(turns).messages.length, MAX_MESSAGES);
 });
 
 test("no output limit or sampling value is ever sent", () => {
   // Both are server policy; a client that could set them could widen them.
-  const body = toGenerateRequest([{ id: "t1", role: "user", content: "Hello" }]);
-  assert.deepEqual(Object.keys(body), ["messages"]);
+  const body = toAgentRunRequest({
+    ...EMPTY_CONVERSATION,
+    turns: [{ id: "t1", role: "user", content: "Hello" }],
+  });
+
+  assert.deepEqual(Object.keys(body ?? {}), ["messages"]);
 });

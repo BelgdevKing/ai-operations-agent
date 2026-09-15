@@ -1,16 +1,24 @@
 """Append-only audit trail.
 
 Rows are written and never updated or deleted, so the table carries only
-``created_at``. Nothing emits these yet; the writer arrives with the audit
-phase.
+``created_at`` - and that column is the whole order of the trail, which is why
+it is the one place in the schema that does not use ``now()``.
+
+``now()`` is the *transaction* timestamp: PostgreSQL holds it constant from
+BEGIN to COMMIT, so several events written by one unit of work would share it and
+their order would fall to a random primary key. A trail that cannot say whether
+the approval came before or after the run finished is not much of a trail.
+``clock_timestamp()`` advances within a transaction, which is what an append-only
+log actually wants.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import ForeignKey, Index, String, text
+from sqlalchemy import DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,6 +35,14 @@ class AuditEvent(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, B
     """One recorded action."""
 
     __tablename__ = "audit_events"
+
+    # Overrides CreatedAtMixin's now(). See the module docstring: this column is
+    # the order of the trail, and a transaction-constant clock cannot provide one.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.clock_timestamp(),
+        nullable=False,
+    )
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True),

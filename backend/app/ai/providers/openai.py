@@ -134,8 +134,13 @@ class OpenAIProvider(LLMProvider):
         arguments: dict[str, Any] = {
             "model": request.model,
             # System messages stay in place: OpenAI takes them as messages.
+            #
+            # transport_role/transport_content rather than the raw fields: a
+            # tool turn is conveyed as a user turn. The native "tool" role here
+            # requires a tool_call_id from a tool_calls block, and this
+            # architecture does not use provider tool calling.
             "messages": [
-                {"role": message.role.value, "content": message.content}
+                {"role": message.transport_role.value, "content": message.transport_content}
                 for message in request.messages
             ],
             "max_completion_tokens": request.max_output_tokens,

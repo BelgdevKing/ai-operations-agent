@@ -76,8 +76,19 @@ async def test_jsonb_columns_are_really_jsonb(session: AsyncSession) -> None:
     assert {(t, c) for t, c in rows} == {
         ("approvals", "parameters"),
         ("audit_events", "metadata"),
+        # The structured form of a rendered conversation turn. In the content
+        # store on purpose - the operational execution tables hold no tool
+        # arguments and no tool payloads, and have no JSONB column at all.
+        ("messages", "tool_metadata"),
+        # The workflow's own data context: what a run was started with, what
+        # each step produced, and what it ended up with. Tenant-scoped and
+        # bounded - see app/models/workflow.py.
+        ("workflow_runs", "input_data"),
+        ("workflow_runs", "output_data"),
         ("workflow_step_runs", "input_data"),
         ("workflow_step_runs", "output_data"),
+        # The steps and transitions a workflow is made of. Data, never code.
+        ("workflows", "definition"),
         ("workflow_steps", "configuration"),
     }
 

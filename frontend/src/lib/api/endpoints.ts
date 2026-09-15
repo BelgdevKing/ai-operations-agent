@@ -22,7 +22,20 @@ import type {
   MemberRole,
   OrganizationResponse,
 } from "@/types/organization";
-import type { GenerateRequest, GenerateResponse } from "@/types/ai";
+import type {
+  AgentRunRequest,
+  AgentRunResponse,
+  AgentSummary,
+  ApprovalDecisionResponse,
+  ApprovalResponse,
+  ConversationDetail,
+  ConversationSummary,
+  GenerateRequest,
+  GenerateResponse,
+  WorkflowRunResponse,
+  WorkflowStepRunResponse,
+  WorkflowSummary,
+} from "@/types/ai";
 
 /** Mounted prefix of the versioned API. Matches `Settings.api_v1_prefix`. */
 const V1 = "/api/v1";
@@ -155,4 +168,227 @@ export function generate(
     timeoutMs: AI_TIMEOUT_MS,
     ...options,
   });
+}
+
+/**
+ * The agents this organization may run.
+ *
+ * Scoped by the backend to the caller's own tenant, so there is no agent id for
+ * a client to guess at.
+ */
+export function listAgents(caller: ApiCaller, options?: CallOptions): Promise<AgentSummary[]> {
+  return caller.get<AgentSummary[]>(`${V1}/ai/agents`, options);
+}
+
+/** Header making a run repeatable. Matches the backend's own constant. */
+export const IDEMPOTENCY_HEADER = "Idempotency-Key";
+
+export interface RunAgentOptions extends CallOptions {
+  /**
+   * Opaque token making this run repeatable.
+   *
+   * Sending the same key again returns the run it already created rather than
+   * starting a second one - which is what makes retrying safe when the first
+   * answer never arrived. Scoped per organization by the backend.
+   */
+  idempotencyKey?: string;
+}
+
+/**
+ * Run an agent over a conversation.
+ *
+ * The agent decides which tools to use and the server runs them; this sends one
+ * new message and, for a conversation already under way, which one. Model,
+ * provider, instructions and limits are all server configuration, and the body
+ * has no field for any of them.
+ *
+ * **The run may come back unfinished.** A `status` of `awaiting_approval` means
+ * a person has been asked about a tool; the run continues, under the same id,
+ * once somebody decides.
+ *
+ * Shares the generation deadline: an agent run makes several model calls and a
+ * database query or two, so it is the slower of the two paths.
+ */
+export function runAgent(
+  caller: ApiCaller,
+  agentId: string,
+  body: AgentRunRequest,
+  { idempotencyKey, ...options }: RunAgentOptions = {},
+): Promise<AgentRunResponse> {
+  return caller.post<AgentRunResponse>(
+    `${V1}/ai/agents/${encodeURIComponent(agentId)}/run`,
+    body,
+    {
+      timeoutMs: AI_TIMEOUT_MS,
+      ...options,
+      headers: {
+        ...options.headers,
+        ...(idempotencyKey ? { [IDEMPOTENCY_HEADER]: idempotencyKey } : {}),
+      },
+    },
+  );
+}
+
+/**
+ * One durable run.
+ *
+ * What makes a run survive the page that started it: an interface closed while
+ * an approval was pending can come back and find it where it was left.
+ */
+export function getRun(
+  caller: ApiCaller,
+  runId: string,
+  options?: CallOptions,
+): Promise<AgentRunResponse> {
+  return caller.get<AgentRunResponse>(`${V1}/ai/runs/${encodeURIComponent(runId)}`, options);
+}
+
+// -- Stored conversations -----------------------------------------------------
+
+/** This organization's conversations, newest first. */
+export function listConversations(
+  caller: ApiCaller,
+  options?: CallOptions,
+): Promise<ConversationSummary[]> {
+  return caller.get<ConversationSummary[]>(`${V1}/ai/conversations`, options);
+}
+
+/**
+ * One stored conversation and its turns.
+ *
+ * Tool turns come back as a name and an outcome. The records the tools read
+ * reach the reader through the agent's answer.
+ */
+export function getConversation(
+  caller: ApiCaller,
+  conversationId: string,
+  options?: CallOptions,
+): Promise<ConversationDetail> {
+  return caller.get<ConversationDetail>(
+    `${V1}/ai/conversations/${encodeURIComponent(conversationId)}`,
+    options,
+  );
+}
+
+// -- Approvals ----------------------------------------------------------------
+
+/** Actions waiting on a person. Readable by any active member. */
+export function listApprovals(
+  caller: ApiCaller,
+  options?: CallOptions,
+): Promise<ApprovalResponse[]> {
+  return caller.get<ApprovalResponse[]>(`${V1}/approvals`, options);
+}
+
+/**
+ * Approve an action and resume the run that was waiting on it.
+ *
+ * Requires the admin or owner role, which the **backend** enforces on every
+ * request. The interface hides the control from a member so they are not shown
+ * something that would fail; that is a courtesy, not the boundary.
+ *
+ * Answers with what it resumed - an agent run, a workflow run, or both where an
+ * agent step inside a workflow was waiting.
+ */
+export function approveAction(
+  caller: ApiCaller,
+  approvalId: string,
+  options?: CallOptions,
+): Promise<ApprovalDecisionResponse> {
+  return caller.post<ApprovalDecisionResponse>(
+    `${V1}/approvals/${encodeURIComponent(approvalId)}/approve`,
+    undefined,
+    { timeoutMs: AI_TIMEOUT_MS, ...options },
+  );
+}
+
+/**
+ * Decline an action and let the agent respond to having been refused.
+ *
+ * The tool is never executed. The refusal goes back to the agent as an ordinary
+ * outcome, so what the user is told is the agent's own words rather than an
+ * error.
+ */
+export function rejectAction(
+  caller: ApiCaller,
+  approvalId: string,
+  options?: CallOptions,
+): Promise<ApprovalDecisionResponse> {
+  return caller.post<ApprovalDecisionResponse>(
+    `${V1}/approvals/${encodeURIComponent(approvalId)}/reject`,
+    undefined,
+    { timeoutMs: AI_TIMEOUT_MS, ...options },
+  );
+}
+
+// -- Workflows -----------------------------------------------------------------
+
+/** The workflow versions this organization has, newest first within a name. */
+export function listWorkflows(
+  caller: ApiCaller,
+  options?: CallOptions,
+): Promise<WorkflowSummary[]> {
+  return caller.get<WorkflowSummary[]>(`${V1}/ai/workflows`, options);
+}
+
+export interface StartWorkflowOptions extends CallOptions {
+  /** Makes the start repeatable. See `runAgent` for why that matters. */
+  idempotencyKey?: string;
+}
+
+/**
+ * Start a run of an active workflow version.
+ *
+ * **The run may come back unfinished.** `awaiting_approval` means a step needs a
+ * person; the same run continues once somebody decides. `failed` with an
+ * `error_code` is an answer about the business process rather than an error - a
+ * tool that found no record, say - so it arrives as a 200.
+ *
+ * Shares the agent deadline: a workflow makes several tool calls and possibly a
+ * model call, so it is among the slower paths.
+ */
+export function startWorkflowRun(
+  caller: ApiCaller,
+  workflowId: string,
+  input: Record<string, unknown>,
+  { idempotencyKey, ...options }: StartWorkflowOptions = {},
+): Promise<WorkflowRunResponse> {
+  return caller.post<WorkflowRunResponse>(
+    `${V1}/ai/workflows/${encodeURIComponent(workflowId)}/runs`,
+    { input },
+    {
+      timeoutMs: AI_TIMEOUT_MS,
+      ...options,
+      headers: {
+        ...options.headers,
+        ...(idempotencyKey ? { [IDEMPOTENCY_HEADER]: idempotencyKey } : {}),
+      },
+    },
+  );
+}
+
+/** One durable workflow run, so a reopened page finds it where it was left. */
+export function getWorkflowRun(
+  caller: ApiCaller,
+  workflowId: string,
+  runId: string,
+  options?: CallOptions,
+): Promise<WorkflowRunResponse> {
+  return caller.get<WorkflowRunResponse>(
+    `${V1}/ai/workflows/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}`,
+    options,
+  );
+}
+
+/** What each step of a run did. Names and outcomes, never payloads. */
+export function listWorkflowRunSteps(
+  caller: ApiCaller,
+  workflowId: string,
+  runId: string,
+  options?: CallOptions,
+): Promise<WorkflowStepRunResponse[]> {
+  return caller.get<WorkflowStepRunResponse[]>(
+    `${V1}/ai/workflows/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/steps`,
+    options,
+  );
 }

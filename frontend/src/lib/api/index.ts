@@ -5,18 +5,35 @@ export { createAuthenticatedApi } from "./authenticated";
 export type { ApiCaller, AuthenticatedApiConfig, CallOptions } from "./authenticated";
 export {
   AI_TIMEOUT_MS,
+  IDEMPOTENCY_HEADER,
+  approveAction,
   changeMemberRole,
   generate,
+  getConversation,
   getCurrentUser,
   getHealth,
   getOrganization,
   getReadiness,
+  getRun,
+  getWorkflowRun,
+  listAgents,
+  listApprovals,
+  listConversations,
   listMembers,
+  listWorkflowRunSteps,
+  listWorkflows,
   login,
   register,
+  rejectAction,
   removeMember,
+  runAgent,
+  startWorkflowRun,
 } from "./endpoints";
-export type { ListMembersOptions } from "./endpoints";
+export type {
+  ListMembersOptions,
+  RunAgentOptions,
+  StartWorkflowOptions,
+} from "./endpoints";
 export { describeError, describeSignInError, fieldErrorsOf } from "./presentation";
 export type { ErrorPresentation } from "./presentation";
 export {

@@ -93,8 +93,28 @@ class DocumentStatus(enum.StrEnum):
     FAILED = "failed"
 
 
+class WorkflowStatus(enum.StrEnum):
+    """Lifecycle of one version of a workflow definition.
+
+    Replaces the ``enabled`` boolean the schema phase gave ``workflows``, which
+    could not tell "nobody has finished writing this" from "somebody turned it
+    off". Only ``active`` versions may be started, and a draft is never run by
+    accident.
+    """
+
+    DRAFT = "draft"
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
 class WorkflowStepType(enum.StrEnum):
-    """The kinds of step a workflow can contain."""
+    """The kinds of step a workflow can contain.
+
+    These names are also the ``type`` discriminator in the stored definition
+    document - see :mod:`app.workflows.definition`. One vocabulary for the
+    document, the column and the engine; a second, friendlier set of names would
+    only be a mapping to keep in step.
+    """
 
     TOOL_CALL = "tool_call"
     AGENT_STEP = "agent_step"
@@ -103,10 +123,20 @@ class WorkflowStepType(enum.StrEnum):
 
 
 class RunStatus(enum.StrEnum):
-    """State of a workflow run."""
+    """State of a *workflow* run.
+
+    Not the agent runtime's. An agent run's lifecycle is
+    :class:`app.agents.models.AgentRunStatus`, and the two are near-twins that
+    differ in one word: this one says "succeeded" where that one says
+    "completed". The word is not worth a data migration to align, and both
+    tables now carry ``awaiting_approval``, which is the state that actually
+    matters - a run paused because a person was asked is not a run that
+    finished.
+    """
 
     PENDING = "pending"
     RUNNING = "running"
+    AWAITING_APPROVAL = "awaiting_approval"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -115,22 +145,92 @@ class RunStatus(enum.StrEnum):
 class StepRunStatus(enum.StrEnum):
     """State of a single step within a run.
 
-    Separate from :class:`RunStatus` because a step can be skipped - by a
-    condition, or because an earlier step failed - which a run cannot.
+    Separate from :class:`RunStatus` because a step can be *skipped* - the
+    branch a condition did not take - which a run cannot, and because a step
+    waiting on a person has to be distinguishable from one that is running.
     """
 
     PENDING = "pending"
     RUNNING = "running"
+    AWAITING_APPROVAL = "awaiting_approval"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+    CANCELLED = "cancelled"
 
 
 class ApprovalStatus(enum.StrEnum):
-    """State of a human approval request."""
+    """State of a human approval request.
+
+    Only one decision may ever be recorded, so the transition out of ``pending``
+    is made by a conditional UPDATE rather than by reading the row and writing
+    it back - see :class:`app.repositories.approval.ApprovalRepository`.
+    """
 
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+
+# -- Business operations ------------------------------------------------------
+
+
+class CustomerStatus(enum.StrEnum):
+    """Whether an account is currently traded with."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class ShipmentStatus(enum.StrEnum):
+    """Where a shipment is in its journey.
+
+    Enumerated rather than free text so the agent and the application agree on
+    what "delivered" means without either of them guessing.
+    """
+
+    PENDING = "pending"
+    IN_TRANSIT = "in_transit"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+    EXCEPTION = "exception"
+
+
+class ChargeType(enum.StrEnum):
+    """What a charge on a shipment is for."""
+
+    FREIGHT = "freight"
+    FUEL_SURCHARGE = "fuel_surcharge"
+    CUSTOMS_DUTY = "customs_duty"
+    HANDLING = "handling"
+    STORAGE = "storage"
+    INSURANCE = "insurance"
+
+
+class ChargeStatus(enum.StrEnum):
+    """Whether a charge is still owed.
+
+    ``outstanding`` is the whole business rule: what a customer still owes on a
+    shipment is the sum of the charges in this state.
+    """
+
+    OUTSTANDING = "outstanding"
+    PAID = "paid"
+    WAIVED = "waived"
+
+
+class InvoiceStatus(enum.StrEnum):
+    """Where an invoice is in its billing cycle.
+
+    Deliberately no ``overdue``: that depends on today's date, and a status
+    column recording it would be wrong the morning after it was written.
+    Overdue is derived when it is needed.
+    """
+
+    DRAFT = "draft"
+    ISSUED = "issued"
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
     CANCELLED = "cancelled"

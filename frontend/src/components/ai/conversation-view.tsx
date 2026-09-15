@@ -22,7 +22,8 @@ export function ConversationView({ turns, generating }: ConversationViewProps) {
   if (turns.length === 0 && !generating) {
     return (
       <EmptyState title="Nothing asked yet">
-        Describe what you need in your own words. The conversation lasts as long as this page does.
+        Describe what you need in your own words. The conversation is kept for your organization,
+        so you can come back to it.
       </EmptyState>
     );
   }
@@ -70,13 +71,29 @@ function Message({ turn }: { turn: Turn }) {
   );
 }
 
-/** What produced the answer, from the fields the endpoint actually returns. */
+/**
+ * What produced the answer, from the fields the endpoint actually returns.
+ *
+ * Tool *names*, and what the call cost. Never what a tool was asked or what it
+ * returned: those are the tenant's business records and the agent's working,
+ * and showing them here for the sake of observability is exactly the trade this
+ * interface does not make.
+ *
+ * Usage and latency are optional because a turn read back from a stored
+ * conversation has neither - the conversation records what was said, not what
+ * each call cost - and a footer that invented zeros would be worse than one
+ * that says nothing.
+ */
 function AnswerFooter({ turn }: { turn: AssistantTurn }) {
+  if (turn.tools.length === 0 && turn.usage === undefined) return null;
+
   return (
     <p className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
-      <Badge>{turn.model}</Badge>
-      <span>{turn.usage.total_tokens.toLocaleString()} tokens</span>
-      <span>{(turn.latencyMs / 1000).toFixed(1)}s</span>
+      {turn.tools.map((tool, index) => (
+        <Badge key={`${tool}-${index}`}>{tool}</Badge>
+      ))}
+      {turn.usage && <span>{turn.usage.total_tokens.toLocaleString()} tokens</span>}
+      {turn.latencyMs !== undefined && <span>{(turn.latencyMs / 1000).toFixed(1)}s</span>}
     </p>
   );
 }

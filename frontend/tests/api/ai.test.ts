@@ -6,20 +6,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { acme, FAKE_TOKEN, generateResponse, tokenResponse, currentUser } from "../support/fixtures";
+import {
+  acme,
+  CONVERSATION_ID,
+  FAKE_TOKEN,
+  agentRunResponse,
+  tokenResponse,
+  currentUser,
+} from "../support/fixtures";
 import { errorResponse, jsonResponse, stubFetch } from "../support/fetch-stub";
 import {
   ApiError,
   createAuthenticatedApi,
   describeError,
-  generate,
   isAbortError,
+  runAgent,
 } from "@/lib/api";
 import { SessionStore } from "@/lib/auth/session-store";
 import {
   EMPTY_CONVERSATION,
   conversationReducer as reduce,
-  toGenerateRequest,
+  toAgentRunRequest,
 } from "@/lib/ai/conversation";
 
 const caller = createAuthenticatedApi({
@@ -27,26 +34,27 @@ const caller = createAuthenticatedApi({
   getOrganizationId: () => acme.id,
 });
 
+const AGENT_ID = "55555555-5555-4555-8555-555555555555";
 const ASK = { messages: [{ role: "user" as const, content: "What is a refund policy?" }] };
 
 // -- The request --------------------------------------------------------------
 
-test("generation posts to the platform's own AI endpoint", async () => {
-  const fetch = stubFetch(() => jsonResponse(generateResponse("An answer.")));
+test("a run posts to the platform's own agent endpoint", async () => {
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("An answer.")));
   try {
-    await generate(caller, ASK);
+    await runAgent(caller, AGENT_ID, ASK);
 
     assert.equal(fetch.last.method, "POST");
-    assert.equal(new URL(fetch.last.url).pathname, "/api/v1/ai/generate");
+    assert.equal(new URL(fetch.last.url).pathname, `/api/v1/ai/agents/${AGENT_ID}/run`);
   } finally {
     fetch.restore();
   }
 });
 
 test("the request is authenticated and names the acting organization", async () => {
-  const fetch = stubFetch(() => jsonResponse(generateResponse("An answer.")));
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("An answer.")));
   try {
-    await generate(caller, ASK);
+    await runAgent(caller, AGENT_ID, ASK);
 
     assert.equal(fetch.last.headers.authorization, `Bearer ${FAKE_TOKEN}`);
     assert.equal(fetch.last.headers["x-organization-id"], acme.id);
@@ -60,7 +68,7 @@ test("an unauthenticated caller sends no credentials", async () => {
   const anonymous = createAuthenticatedApi({ getToken: () => null });
   const fetch = stubFetch(() => errorResponse(401, "unauthorized", "Not authenticated."));
   try {
-    await assert.rejects(() => generate(anonymous, ASK));
+    await assert.rejects(() => runAgent(anonymous, AGENT_ID, ASK));
     assert.equal("authorization" in fetch.last.headers, false);
   } finally {
     fetch.restore();
@@ -68,9 +76,9 @@ test("an unauthenticated caller sends no credentials", async () => {
 });
 
 test("the body carries only the conversation", async () => {
-  const fetch = stubFetch(() => jsonResponse(generateResponse("An answer.")));
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("An answer.")));
   try {
-    await generate(caller, ASK);
+    await runAgent(caller, AGENT_ID, ASK);
     assert.deepEqual(fetch.last.body, ASK);
   } finally {
     fetch.restore();
@@ -78,9 +86,9 @@ test("the body carries only the conversation", async () => {
 });
 
 test("nothing in the request names a provider, model or organization", async () => {
-  const fetch = stubFetch(() => jsonResponse(generateResponse("An answer.")));
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("An answer.")));
   try {
-    await generate(caller, ASK);
+    await runAgent(caller, AGENT_ID, ASK);
 
     const sent = JSON.stringify(fetch.last.body);
     for (const forbidden of ["anthropic", "openai", "provider", "model", "organization", "api_key"]) {
@@ -94,16 +102,17 @@ test("nothing in the request names a provider, model or organization", async () 
 // -- A whole exchange ---------------------------------------------------------
 
 test("a message goes out and the answer lands in the conversation", async () => {
-  const fetch = stubFetch(() => jsonResponse(generateResponse("Refunds take five days.")));
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("Refunds take five days.")));
   try {
     const asked = reduce(EMPTY_CONVERSATION, {
       type: "send",
       id: "u1",
       content: "How long do refunds take?",
+      idempotencyKey: "key-1",
     });
     assert.equal(asked.status, "generating");
 
-    const response = await generate(caller, toGenerateRequest(asked.turns));
+    const response = await runAgent(caller, AGENT_ID, toAgentRunRequest(asked)!);
     const answered = reduce(asked, { type: "received", id: "a1", response });
 
     assert.deepEqual(fetch.last.body, {
@@ -117,22 +126,54 @@ test("a message goes out and the answer lands in the conversation", async () => 
   }
 });
 
-test("a follow-up sends the whole conversation, because the endpoint is stateless", async () => {
-  const fetch = stubFetch(() => jsonResponse(generateResponse("Second answer.")));
+test("a follow-up sends one new message and names the stored conversation", async () => {
+  // The history is the server's since conversations became durable. Re-sending
+  // it would be a client asserting what was already said, and the backend
+  // refuses anything but a single new user turn on an existing conversation.
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("Second answer.")));
   try {
-    let state = reduce(EMPTY_CONVERSATION, { type: "send", id: "u1", content: "First" });
-    state = reduce(state, { type: "received", id: "a1", response: generateResponse("One.") });
-    state = reduce(state, { type: "send", id: "u2", content: "Second" });
+    let state = reduce(EMPTY_CONVERSATION, {
+      type: "send",
+      id: "u1",
+      content: "First",
+      idempotencyKey: "key-1",
+    });
+    state = reduce(state, { type: "received", id: "a1", response: agentRunResponse("One.") });
+    state = reduce(state, {
+      type: "send",
+      id: "u2",
+      content: "Second",
+      idempotencyKey: "key-2",
+    });
 
-    await generate(caller, toGenerateRequest(state.turns));
+    await runAgent(caller, AGENT_ID, toAgentRunRequest(state)!);
 
     assert.deepEqual(fetch.last.body, {
-      messages: [
-        { role: "user", content: "First" },
-        { role: "assistant", content: "One." },
-        { role: "user", content: "Second" },
-      ],
+      messages: [{ role: "user", content: "Second" }],
+      conversation_id: CONVERSATION_ID,
     });
+  } finally {
+    fetch.restore();
+  }
+});
+
+test("a key travels as the Idempotency-Key header", async () => {
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("An answer.")));
+  try {
+    await runAgent(caller, AGENT_ID, ASK, { idempotencyKey: "turn-abc" });
+
+    assert.equal(fetch.last.headers["idempotency-key"], "turn-abc");
+  } finally {
+    fetch.restore();
+  }
+});
+
+test("a run without a key sends no such header", async () => {
+  const fetch = stubFetch(() => jsonResponse(agentRunResponse("An answer.")));
+  try {
+    await runAgent(caller, AGENT_ID, ASK);
+
+    assert.equal("idempotency-key" in fetch.last.headers, false);
   } finally {
     fetch.restore();
   }
@@ -146,7 +187,7 @@ test("403 is an access problem, in the backend's words", async () => {
   );
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => {
         const { title, message } = describeError(error);
         assert.equal(title, "Access denied");
@@ -167,7 +208,7 @@ test("422 explains that the request was not acceptable", async () => {
   );
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => {
         const { title, fieldErrors } = describeError(error);
         assert.match(title, /Check the details/);
@@ -188,7 +229,7 @@ test("422 also covers a model the deployment does not allow", async () => {
   );
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => error instanceof ApiError && error.status === 422,
     );
   } finally {
@@ -202,7 +243,7 @@ test("429 tells the user to wait", async () => {
   );
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => {
         assert.match(describeError(error).title, /Too many requests/);
         return true;
@@ -219,7 +260,7 @@ test("502 is reported as a provider failure worth retrying", async () => {
   );
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => {
         const { title, message } = describeError(error);
         assert.match(title, /could not answer/);
@@ -238,7 +279,7 @@ test("504 suggests trying again or asking for less", async () => {
   );
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => {
         const { title, message } = describeError(error);
         assert.match(title, /took too long/);
@@ -262,7 +303,7 @@ test("a 500 never shows the server's own explanation", async () => {
   );
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => {
         const { message, requestId } = describeError(error);
         assert.equal(message.includes("OPENAI_API_KEY"), false);
@@ -282,7 +323,7 @@ test("a network failure is a connection problem, not a model problem", async () 
   });
   try {
     await assert.rejects(
-      () => generate(caller, ASK),
+      () => runAgent(caller, AGENT_ID, ASK),
       (error: unknown) => {
         assert.match(describeError(error).title, /Cannot reach the server/);
         return true;
@@ -303,7 +344,7 @@ test("every refusal offers a request id to quote", async () => {
     const fetch = stubFetch(() => errorResponse(status, code, "No."));
     try {
       await assert.rejects(
-        () => generate(caller, ASK),
+        () => runAgent(caller, AGENT_ID, ASK),
         (error: unknown) => {
           assert.equal(describeError(error).requestId, "test-request-id");
           return true;
@@ -332,7 +373,7 @@ test("a 401 during generation ends the session", async () => {
 
   const expired = stubFetch(() => errorResponse(401, "unauthorized", "Could not validate credentials."));
   try {
-    await assert.rejects(() => generate(store.api, ASK), ApiError);
+    await assert.rejects(() => runAgent(store.api, AGENT_ID, ASK), ApiError);
 
     const state = store.getSnapshot();
     assert.equal(state.status, "anonymous");
@@ -348,7 +389,7 @@ test("cancelling in flight raises an abort, not an error to display", async () =
   const controller = new AbortController();
   const fetch = stubFetch(() => new Promise<Response>(() => {}));
   try {
-    const pending = generate(caller, ASK, { signal: controller.signal });
+    const pending = runAgent(caller, AGENT_ID, ASK, { signal: controller.signal });
     controller.abort();
 
     await assert.rejects(
@@ -369,9 +410,14 @@ test("a cancelled generation leaves the conversation intact and retryable", asyn
   const controller = new AbortController();
   const fetch = stubFetch(() => new Promise<Response>(() => {}));
   try {
-    let state = reduce(EMPTY_CONVERSATION, { type: "send", id: "u1", content: "Hello" });
+    let state = reduce(EMPTY_CONVERSATION, {
+      type: "send",
+      id: "u1",
+      content: "Hello",
+      idempotencyKey: "key-1",
+    });
 
-    const pending = generate(caller, toGenerateRequest(state.turns), {
+    const pending = runAgent(caller, AGENT_ID, toAgentRunRequest(state)!, {
       signal: controller.signal,
     });
     controller.abort();
