@@ -36,8 +36,8 @@ RESPONSES: dict[int | str, dict[str, object]] = {
 )
 async def generate(
     payload: GenerateRequest,
-    service: AIServiceDep,
     membership: RequireMember,
+    service: AIServiceDep,
 ) -> GenerateResponse:
     """Ask the configured model for a completion.
 
@@ -49,6 +49,13 @@ async def generate(
     `model` is optional; omitting it uses the deployment's configured model,
     which is the normal case. Naming one that the deployment has not allowed is
     a 422.
+
+    The parameter order matters and is not cosmetic. FastAPI resolves
+    dependencies in the order they are declared, and the gateway is built on
+    first use - so with `service` first, a deployment missing its provider
+    credential answered an *anonymous* request with a configuration 500 before
+    authentication ever ran. Authorization is declared first so the pipeline is
+    always: authenticate, authorize, then touch the provider.
 
     Provider failures arrive already normalised: 429 when rate limited, 504 on
     a timeout, 502 for a provider fault, 500 for a misconfiguration - each in

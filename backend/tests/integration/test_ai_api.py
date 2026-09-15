@@ -559,3 +559,121 @@ def test_a_uuid_in_the_body_is_not_a_tenant_selector() -> None:
     assert "organization_id" not in GenerateRequest.model_fields
     assert "provider" not in GenerateRequest.model_fields
     assert uuid.UUID  # the type is never used in this schema
+
+
+# -- Dependency order: authenticate, authorize, then touch the provider --------
+#
+# These tests deliberately do NOT override get_ai_service. The test settings
+# carry no provider credential, so the real gateway raises
+# LLMConfigurationError the moment it is built. That makes the construction
+# order observable: whichever runs first decides the status code.
+#
+# Before the fix, `service` was declared ahead of `membership`, so an anonymous
+# request to a deployment with no credential answered 500 instead of 401.
+
+
+async def test_an_unauthenticated_request_is_refused_before_the_provider_is_touched(
+    api_client: AsyncClient,
+) -> None:
+    """401, even where the provider is misconfigured.
+
+    Authentication is not conditional on the deployment being able to generate.
+    """
+    response = await api_client.post(GENERATE, json=a_body())
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_a_suspended_organization_is_refused_before_the_provider_is_touched(
+    api_client: AsyncClient, session: AsyncSession
+) -> None:
+    """403, decided by membership rather than by provider configuration."""
+    account = await register(api_client)
+    organization = await session.get(Organization, account.organization_id)
+    assert organization is not None
+    organization.status = OrganizationStatus.SUSPENDED
+    await session.flush()
+
+    response = await api_client.post(GENERATE, json=a_body(), headers=account.headers())
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "permission_denied"
+
+
+async def test_a_suspended_membership_is_refused_before_the_provider_is_touched(
+    api_client: AsyncClient, session: AsyncSession
+) -> None:
+    from sqlalchemy import select
+
+    account = await register(api_client)
+    membership = (
+        await session.execute(
+            select(OrganizationMember).where(OrganizationMember.user_id == account.user_id)
+        )
+    ).scalar_one()
+    membership.status = MembershipStatus.SUSPENDED
+    await session.flush()
+
+    response = await api_client.post(GENERATE, json=a_body(), headers=account.headers())
+
+    assert response.status_code == 403
+
+
+async def test_a_suspended_user_is_refused_before_the_provider_is_touched(
+    api_client: AsyncClient, session: AsyncSession
+) -> None:
+    """401: an inactive user's token stops working, whatever the deployment."""
+    account = await register(api_client)
+    user = await session.get(User, account.user_id)
+    assert user is not None
+    user.status = UserStatus.SUSPENDED
+    await session.flush()
+
+    response = await api_client.post(GENERATE, json=a_body(), headers=account.headers())
+
+    assert response.status_code == 401
+
+
+async def test_a_misconfigured_provider_surfaces_only_after_authorization(
+    api_client: AsyncClient,
+) -> None:
+    """The configuration failure is reached, but only by an authorized caller.
+
+    This is the other half of the ordering guarantee: authorization first does
+    not mean the provider error disappears for someone entitled to generate.
+    """
+    account = await register(api_client)
+
+    response = await api_client.post(GENERATE, json=a_body(), headers=account.headers())
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "llm_configuration_error"
+
+
+async def test_the_configuration_failure_names_no_environment_variable(
+    api_client: AsyncClient,
+) -> None:
+    """A deployment problem must not describe the deployment to a client."""
+    account = await register(api_client)
+
+    response = await api_client.post(GENERATE, json=a_body(), headers=account.headers())
+
+    body = response.text
+    assert "ANTHROPIC_API_KEY" not in body
+    assert "OPENAI_API_KEY" not in body
+    assert "LLM_PROVIDER" not in body
+    assert response.json()["error"]["details"] == {}
+
+
+async def test_the_successful_path_is_unchanged_by_the_ordering_fix(
+    api_client: AsyncClient, ai_service: StubAIService
+) -> None:
+    """With the service stubbed, an authorized caller still generates."""
+    account = await register(api_client)
+
+    response = await api_client.post(GENERATE, json=a_body(), headers=account.headers())
+
+    assert response.status_code == 200
+    assert response.json()["content"] == COMPLETION
+    assert ai_service.calls == 1

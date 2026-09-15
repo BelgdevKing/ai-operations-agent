@@ -5,8 +5,9 @@ operational data — agents that understand a request, look things up, reason ov
 business rules, call tools, and execute workflows, while sensitive actions stop
 for human approval and everything is written to an audit log.
 
-Open-source portfolio project. **Status: local development environment running.**
-No authentication, agents, AI, RAG or workflows yet.
+Open-source portfolio project. **Status: authenticated application with a
+working AI generation path.** Agents, tools, RAG and workflows are not built
+yet — see the roadmap below.
 
 ---
 
@@ -59,7 +60,8 @@ ai-operations-agent/
 ├── frontend/                  # Next.js App Router dashboard (TypeScript)
 │   ├── src/app/               # routes, layout, global styles
 │   ├── src/components/        # UI, incl. shadcn/ui primitives later
-│   ├── src/lib/               # API client, configuration
+│   ├── src/hooks/             # reusable client-side behaviour
+│   ├── src/lib/               # API client, session, configuration
 │   ├── src/types/             # shared TypeScript types
 │   └── .env.example           # native development settings
 ├── infrastructure/
@@ -165,6 +167,16 @@ Each phase is a working slice, built in order.
       OpenAI behind a single gateway with explicit retry policy, plus an
       authenticated `POST /api/v1/ai/generate`. Built ahead of the phases below,
       which the agent work depends on.
+- [x] **Frontend foundation.** App Router shell and routes, a single API
+      client with the shared error envelope, and TypeScript types mirroring the
+      backend contracts. Built ahead of the dashboard phase below.
+- [x] **Frontend authentication.** Sign-in, registration, guarded routes, the
+      current user, and organization membership administration against the
+      identity API. The access token is held in memory only, so a reload signs
+      you out - see [frontend/README.md](frontend/README.md#authentication).
+- [x] **AI workspace.** A `/ai` screen that sends a conversation through the
+      existing generation endpoint and shows the answer. Conversations are
+      held in the browser only; there is no persistence yet.
 - [ ] **5 — Business data.** The CRUD and search surface agents will query,
       plus row-level security behind the scoped repositories.
 - [ ] **6 — Documents.** Upload, storage, chunking, embeddings, vector search.

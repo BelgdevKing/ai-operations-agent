@@ -152,6 +152,18 @@ The homepage is then on <http://localhost:3000>. It shows a live indicator for
 backend reachability, so with both terminals running you should see the API
 reported as reachable.
 
+To reach `/dashboard`, `/ai`, `/organization` or `/settings` you need an account:
+create one at <http://localhost:3000/register>, which also creates the
+organization you will own. Note that the access token is held in memory only, so
+**reloading the page signs you out** - a deliberate limitation explained in
+[frontend/README.md](../frontend/README.md#authentication).
+
+The `/ai` workspace needs a provider credential on the **backend**:
+set `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` with `LLM_PROVIDER=openai`) in
+`backend/.env`. Without one, generation answers 500 and the screen says the
+server could not complete the request. No credential ever belongs in the
+frontend environment.
+
 Only `NEXT_PUBLIC_*` variables reach the browser. Never put a secret in
 [frontend/.env.example](../frontend/.env.example) or `.env.local`.
 
@@ -276,8 +288,10 @@ Frontend:
 
 ```powershell
 npm run dev                          # dev server with hot reload
-npm run build                        # production build
+npm run lint                         # eslint
 npm run typecheck                    # tsc --noEmit
+npm test                             # node:test (no browser, no extra deps)
+npm run build                        # production build
 ```
 
 Integration tests skip themselves when PostgreSQL is unreachable, so the suite
