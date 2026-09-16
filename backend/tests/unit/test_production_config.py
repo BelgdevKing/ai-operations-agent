@@ -41,6 +41,12 @@ def deployable(environment: str, **overrides: Any) -> Settings:
     ``_env_file=None`` throughout this file: a developer's own backend/.env is
     on disk and git-ignored, and a test asking what the *shipped* defaults are
     must not read it.
+
+    That shuts out one ambient source of two. The other is the environment
+    itself, which ``_env_file=None`` does not touch and which outranks a field
+    default; the ``isolated_environment`` fixture in tests/conftest.py shuts
+    that out. Every call here passes the values it asserts on explicitly, and
+    init arguments outrank both - so only a test reading a default needs it.
     """
     defaults: dict[str, Any] = {
         "app_env": environment,
@@ -76,8 +82,18 @@ def test_a_deployment_refuses_the_development_database_password(environment: str
 
 
 @pytest.mark.parametrize("environment", LOCAL)
-def test_a_local_environment_keeps_the_convenient_default(environment: str) -> None:
-    """The stack has to start on a fresh checkout with no setup."""
+def test_a_local_environment_keeps_the_convenient_default(
+    environment: str, isolated_environment: None
+) -> None:
+    """The stack has to start on a fresh checkout with no setup.
+
+    ``isolated_environment`` as well as ``_env_file=None``: this is the one
+    test in the file that asserts a *default* rather than overriding it, so it
+    is the one the surrounding environment can answer for. CI exports
+    DATABASE_URL to reach its Postgres service, and an environment variable
+    outranks a field default - so without the fixture this reads back CI's URL
+    and fails, while passing on any machine that exports nothing.
+    """
     shipped = Settings(_env_file=None, app_env=environment)
 
     assert DEV_DATABASE_PASSWORD in shipped.database_url

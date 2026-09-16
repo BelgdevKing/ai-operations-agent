@@ -2,26 +2,14 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
 
-
-@pytest.fixture
-def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Remove every Settings variable from the process environment.
-
-    The names come from the model's own fields rather than a hard-coded list,
-    so adding a setting cannot quietly reintroduce the leak this guards
-    against. Matching is case-insensitive because Settings is.
-    """
-    field_names = {name.upper() for name in Settings.model_fields}
-    for key in list(os.environ):
-        if key.upper() in field_names:
-            monkeypatch.delenv(key, raising=False)
+# ``isolated_environment`` lives in tests/conftest.py: tests/unit/
+# test_production_config.py asserts shipped defaults too and needs the same
+# guard.
 
 
 def test_defaults_are_development_friendly(isolated_environment: None) -> None:

@@ -25,9 +25,15 @@ from app.models.enums import ChargeStatus, ChargeType, InvoiceStatus, ShipmentSt
 # A fixed namespace, so every id below is a pure function of its key.
 NAMESPACE = uuid.UUID("7c3f0b9e-5a1d-4f86-9c2a-1d0e5b7a4c31")
 
-# A fixed anchor rather than "now", so dates are stable between runs and a
-# test asserting "overdue" does not start failing at midnight.
-ANCHOR = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+# Anchored to today rather than to a fixed calendar date. Every date below is
+# an offset from this, and "overdue" is derived from the real clock at read
+# time (app/tools/business/money.py), so a fixed anchor does not make the data
+# stable - it makes it expire: the invoice seeded as "due in a fortnight" comes
+# due, and stays overdue from then on. Relative offsets keep meaning what they
+# say, and a freshly seeded demo keeps showing shipments that have not arrived
+# yet. Normalised to noon UTC so the dates are stable within a run and do not
+# turn over halfway through one.
+ANCHOR = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
 
 
 def demo_id(*parts: str) -> uuid.UUID:

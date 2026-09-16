@@ -8,6 +8,11 @@ duplicated across organizations and a careless re-run would make them ambiguous.
 
 Reusable from a script and from tests, so what a developer sees locally is what
 the tests exercise.
+
+The update branches refresh the dates as well as the statuses. Dates in the
+dataset are offsets from an anchor that moves with today, so a re-run is also
+how a demo database seeded last month stops claiming its shipments are still
+in transit - leaving them at their first-seeded values would age the data.
 """
 
 from __future__ import annotations
@@ -164,6 +169,8 @@ async def _upsert_shipments(
             )
         else:
             existing.status = shipment_spec.status
+            existing.shipped_at = shipment_spec.shipped_at
+            existing.estimated_delivery_at = shipment_spec.estimated_delivery_at
             existing.delivered_at = shipment_spec.delivered_at
 
     await session.flush()
@@ -237,6 +244,7 @@ async def _upsert_invoices(
         else:
             existing.status = invoice_spec.status
             existing.amount_paid = invoice_spec.amount_paid
+            existing.due_date = invoice_spec.due_date
             existing.paid_at = invoice_spec.paid_at
 
     await session.flush()

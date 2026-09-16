@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncGenerator, Callable, Generator
 
 import pytest
@@ -10,6 +11,25 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings, get_settings
 from app.main import create_app
+
+
+@pytest.fixture
+def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every Settings variable from the process environment.
+
+    The names come from the model's own fields rather than a hard-coded list,
+    so adding a setting cannot quietly reintroduce the leak this guards
+    against. Matching is case-insensitive because Settings is.
+
+    Any test asserting what the *shipped* configuration does needs this as well
+    as ``_env_file=None``: they shut out different sources. ``_env_file=None``
+    ignores a developer's backend/.env; this ignores the environment, which CI
+    populates and which outranks the field defaults being asserted.
+    """
+    field_names = {name.upper() for name in Settings.model_fields}
+    for key in list(os.environ):
+        if key.upper() in field_names:
+            monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture
