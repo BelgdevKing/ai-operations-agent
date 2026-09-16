@@ -413,8 +413,22 @@ class ApprovalService:
         The first case is the one worth spelling out. "Already decided" would be
         *false* about a lapsed approval: nobody decided it, and a person looking
         at a stale screen deserves to be told which of those happened.
+
+        **The row is authoritative here, not the session.** ``get`` returns the
+        instance already in the identity map, and ``_decide`` loaded this
+        approval as ``pending`` before the update - with no commit since, so
+        nothing has expired those attributes. A loser that read its own stale
+        copy would find ``pending``, conclude the clock refused it, and answer
+        410 about an approval with hours left on it. The refresh is what makes
+        the three cases above describe the database rather than a memory of it.
+
+        ``expire_due`` is then asked how many it actually lapsed. Reaching the
+        last branch means this request lost to *something*, and if the sweep
+        lapsed nothing then the something was a decision that landed between the
+        update and the refresh - a conflict, not an expiry.
         """
         current = await self.get(approval_id)
+        await self._session.refresh(current)
 
         if current.status is ApprovalStatus.EXPIRED:
             raise ApprovalExpiredError()
@@ -422,11 +436,14 @@ class ApprovalService:
         if current.status is not ApprovalStatus.PENDING:
             raise ApprovalAlreadyDecidedError()
 
-        await expire_due(
+        lapsed = await expire_due(
             self._session,
             organization_id=self._organization_id,
             instruments=self._instruments,
         )
+        if lapsed == 0:
+            raise ApprovalAlreadyDecidedError()
+
         raise ApprovalExpiredError()
 
     async def _resume_workflow(self, approval: Approval, *, approve: bool) -> WorkflowRunView:

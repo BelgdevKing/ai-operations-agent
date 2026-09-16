@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import FastAPI
@@ -682,6 +683,130 @@ async def test_two_concurrent_approvals_cancel_the_shipment_once(database: None)
                 .one()
             )
             assert shipment.status is ShipmentStatus.CANCELLED
+    finally:
+        if account is not None:
+            async with factory() as cleanup:
+                await cleanup.execute(
+                    text("DELETE FROM organizations WHERE id = :id"),
+                    {"id": account.organization_id},
+                )
+                await cleanup.execute(
+                    text("DELETE FROM users WHERE id = :id"), {"id": account.user_id}
+                )
+                await cleanup.commit()
+
+
+async def test_a_loser_holding_a_stale_view_is_told_conflict_not_expired(
+    database: None,
+) -> None:
+    """The losing decision must say *conflict*, never *expired*.
+
+    The deterministic counterpart to the test above. That one needs two requests
+    to genuinely contend, so which of them loses - and what its session had
+    already loaded - is up to the scheduler. This one puts the loser in the
+    exact state that made CI fail and asserts the answer directly: no sleep, no
+    gather, no second attempt.
+
+    The state is the one the service cannot see for itself. The losing request's
+    session loaded the approval while it was still ``pending``; the winner then
+    decided and committed. The row now says ``approved`` and the session's copy
+    still says ``pending``, and the conditional update refuses either way. A
+    request that trusted its own copy would conclude the clock had refused it
+    and answer ``410 approval_expired`` - about an approval with a full day left
+    on it, which is simply untrue.
+
+    The lifetime is asserted rather than assumed, because it is the whole point:
+    if the approval really had lapsed, 410 would be the right answer.
+    """
+    factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+
+    def build(*decisions: object) -> tuple[FastAPI, AsyncClient]:
+        """An application with its own scripted provider and its own sessions."""
+        settings = Settings(
+            app_env="test", argon2_time_cost=1, argon2_memory_cost_kib=8192, argon2_parallelism=1
+        )
+        application = create_app(settings)
+        script(application, *decisions)
+
+        async def own_session() -> AsyncIterator[AsyncSession]:
+            async with factory() as own:
+                try:
+                    yield own
+                except Exception:
+                    await own.rollback()
+                    raise
+                else:
+                    await own.commit()
+
+        application.dependency_overrides[get_session] = own_session
+        transport = ASGITransport(app=application)
+        return application, AsyncClient(transport=transport, base_url="http://testserver")
+
+    _, setup_client = build(cancelling(), answering())
+    _, winner_client = build(answering())
+    loser_app, loser_client = build(answering())
+
+    # The loser's session is fixed rather than per-request, so the approval it
+    # loads below is the one the request under test will find in its identity
+    # map - which is precisely the condition being regression-tested.
+    loser_session = factory()
+
+    async def fixed_session() -> AsyncIterator[AsyncSession]:
+        try:
+            yield loser_session
+        except Exception:
+            await loser_session.rollback()
+            raise
+        else:
+            await loser_session.commit()
+
+    loser_app.dependency_overrides[get_session] = fixed_session
+
+    account = None
+    try:
+        async with setup_client, winner_client, loser_client, loser_session:
+            account = await register(setup_client)
+
+            async with factory() as seeding:
+                await seed_shipment(seeding, account.organization_id)
+                await seeding.commit()
+
+            paused = (
+                await setup_client.post(RUN_URL, json=body(), headers=account.headers())
+            ).json()
+            assert paused["status"] == "awaiting_approval", paused
+            approval_id = uuid.UUID(paused["approval"]["id"])
+
+            # 1. The loser reads the approval while it is still pending. Nothing
+            #    commits on this session afterwards, so the copy stays as it is.
+            stale = await loser_session.get(Approval, approval_id)
+            assert stale is not None
+            assert stale.status is ApprovalStatus.PENDING
+            assert stale.expires_at is not None
+            assert stale.expires_at > datetime.now(UTC), "the approval must not be expired"
+
+            # 2. The winner decides and commits.
+            url = f"/api/v1/approvals/{approval_id}/approve"
+            winner = await winner_client.post(url, headers=account.headers())
+            assert winner.status_code == 200, winner.text
+
+            # 3. The loser decides, still holding its pending copy.
+            loser = await loser_client.post(url, headers=account.headers())
+
+        assert loser.status_code == 409, loser.text
+        assert loser.json()["error"]["code"] == "approval_already_decided"
+
+        async with factory() as checking:
+            executions = await executions_of(checking, account.organization_id)
+            assert len([e for e in executions if e.executed]) == 1
+            assert await shipment_status(checking, account.organization_id) is (
+                ShipmentStatus.CANCELLED
+            )
+
+            settled = await checking.get(Approval, approval_id)
+            assert settled is not None
+            await checking.refresh(settled)
+            assert settled.status is ApprovalStatus.APPROVED, "never expired"
     finally:
         if account is not None:
             async with factory() as cleanup:
