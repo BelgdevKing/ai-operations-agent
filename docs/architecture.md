@@ -44,38 +44,40 @@ into modules with explicit boundaries.
 ```mermaid
 flowchart TB
     subgraph Client
-        FE["Next.js Dashboard<br/>TypeScript · Tailwind · shadcn/ui"]
+        FE["Next.js Console<br/>TypeScript · Tailwind"]
     end
 
     subgraph Backend["FastAPI Modular Monolith"]
         API["API layer · /api/v1"]
-        MW["Middleware<br/>auth · tenant context · request id"]
+        MW["Middleware<br/>correlation id · timing · access log"]
+        DEP["Dependencies<br/>authentication · organization resolution"]
         MOD["Services · repositories · models"]
-        WRK["Background workers"]
     end
 
     subgraph Data
-        PG[("PostgreSQL<br/>relational + pgvector")]
-        RD[("Redis<br/>cache · queue · rate limit")]
+        PG[("PostgreSQL 17")]
+        RD[("Redis<br/>readiness check only")]
     end
 
     subgraph External
-        CL["Anthropic Claude API"]
-        EMB["Embedding API"]
-        EXT["Tenant systems / APIs"]
+        CL["Anthropic / OpenAI<br/>behind one gateway"]
+        EXT["Organization systems / APIs"]
     end
 
     FE -->|HTTPS JSON| API
     API --> MW
-    MW --> MOD
+    MW --> DEP
+    DEP --> MOD
     MOD --> PG
-    MOD --> RD
     MOD --> CL
-    MOD --> EMB
     MOD --> EXT
-    RD --> WRK
-    WRK --> MOD
+    MOD -.readiness only.-> RD
 ```
+
+Everything in that diagram is implemented. There is **no background worker, no
+job queue and no embedding service**: a run is advanced by the request that
+asked for it, and Redis backs the readiness probe and nothing else. Sections 8
+and 14 record what is planned and what it would add.
 
 **Why a monolith.** The hard problems here are tenant isolation, agent
 correctness, and auditability — none of which get easier by adding a network
@@ -188,8 +190,12 @@ in a third area.
 
 ## 4. Multi-tenancy
 
+**Status: implemented.**
+
 **Strategy: shared database, shared schema, discriminator column.** Every
-tenant-owned table carries a non-null `tenant_id` foreign key.
+tenant-owned table carries a non-null, indexed `organization_id` foreign key.
+The tenant is called an *organization* everywhere in the code and the API; this
+document uses "tenant" only when describing the general pattern.
 
 This is chosen over schema-per-tenant or database-per-tenant because a single
 migration history and connection pool is far simpler to operate, and the
@@ -197,24 +203,42 @@ isolation guarantee can be enforced in one place in code.
 
 ### Enforcement — defence in depth
 
-1. **Tenant resolution (middleware).** Each request resolves exactly one tenant,
-   from a JWT claim (default), an `X-Tenant-ID` header, or a subdomain. The
-   result is stored in a request-scoped context. No tenant, no access.
-2. **Scoped repositories (primary guard).** Repositories take the tenant id from
-   the request context and add `WHERE tenant_id = :tenant_id` to every query. A
-   base repository class provides this; modules do not write raw unscoped
-   queries.
-3. **Postgres row-level security (backstop).** RLS policies on tenant tables,
-   driven by a session variable set per connection checkout — so a bug in
-   application code cannot leak one tenant's rows to another.
+1. **Organization resolution (dependency layer).** The optional
+   `X-Organization-ID` header names the organization a request acts on, and is
+   resolved against the caller's own active memberships in the database on every
+   request. It is a *request*, not a grant: naming an organization the caller is
+   not an active member of yields `403`, identically to naming one that does not
+   exist. With the header absent, a caller belonging to exactly one organization
+   acts in it, and a caller belonging to several must send it. The access token
+   carries `sub`, `iat` and `exp` only — **no organization claim** — so
+   membership can never be asserted by the token alone.
+
+   There is **no JWT-claim and no subdomain tenancy mechanism**: the header is
+   the only one, and it is resolved in the dependency layer rather than in
+   middleware.
+2. **Scoped repositories (primary guard).** `TenantScopedRepository` is the
+   single place the `WHERE organization_id = :organization_id` predicate is
+   written; modules do not write raw unscoped queries.
+3. **Database constraints (backstop).** Tenant-owned rows carry a redundant
+   `UNIQUE (id, organization_id)`, and references between them are composite
+   foreign keys — so a cross-tenant reference is *unrepresentable* rather than
+   merely rejected by application code.
 4. **Tests as a guarantee.** A shared test suite asserts, for every tenant-owned
-   table, that tenant A cannot read or write tenant B's rows.
+   table, that organization A cannot read or write organization B's rows.
+
+> **PostgreSQL row-level security is not implemented.** It remains the intended
+> second database-level layer, but no policy, no session variable and no
+> `ENABLE ROW LEVEL SECURITY` statement exists in any migration today. Layers 1
+> and 2 are application code; layer 3 is the only database-enforced one, and it
+> catches cross-tenant *references* rather than unscoped reads.
+> [evaluation.md](evaluation.md#how-tenant-isolation-works) sets out what that
+> does and does not buy.
 
 ### Keys and indexes
 
-Primary keys are UUIDs. Tenant-owned tables index `(tenant_id, <lookup column>)`
-rather than the lookup column alone, so every query is index-covered under the
-tenant filter.
+Primary keys are UUIDs. Tenant-owned tables index `organization_id`, and where a
+lookup warrants it `(organization_id, <lookup column>)` rather than the lookup
+column alone, so the query is index-covered under the tenant filter.
 
 ---
 
@@ -245,7 +269,7 @@ erDiagram
     APPROVAL_REQUEST ||--o| APPROVAL_DECISION : "resolved by"
 ```
 
-Conventions on every table: `id` (UUID), `tenant_id` where tenant-owned,
+Conventions on every table: `id` (UUID), `organization_id` where tenant-owned,
 `created_at`, `updated_at`. Soft deletes via `deleted_at` where history matters.
 Audit rows are append-only — no update, no delete.
 
@@ -325,18 +349,27 @@ Design points:
 
 ## 8. Retrieval (RAG - not built)
 
-**Ingestion:** upload → store file → extract text → chunk (size and overlap from
-config) → embed each chunk → persist chunk and vector with `tenant_id`. This runs
-as a background job; documents carry an ingestion status.
+**None of this section is built.** What exists is a `documents` table holding
+metadata and an empty `app/knowledge/` package. There is no upload handling, no
+text extraction, no chunking, no embedding, no vector column and no search. The
+design below is the intended shape, recorded so the decision is not remade from
+scratch — read every sentence of it as *would*, not *does*.
 
-**Query:** embed the query → vector similarity search in Postgres (`pgvector`)
-filtered by `tenant_id` → optional keyword/trigram search for a hybrid result →
-merge and rank → hand the top chunks to the agent as tool output, each with a
-citation back to its source document.
+**Ingestion (planned).** Upload → store file → extract text → chunk (size and
+overlap from config) → embed each chunk → persist chunk and vector with
+`organization_id`. This would need a background job runner, which also does not
+exist.
 
-`pgvector` rather than a dedicated vector database: one datastore, one backup,
-one transaction boundary, and tenant filtering that uses the same mechanism as
-every other query. Revisit only if recall or latency demands it.
+**Query (planned).** Embed the query → vector similarity search in Postgres
+(`pgvector`) filtered by `organization_id` → optional keyword/trigram search for
+a hybrid result → merge and rank → hand the top chunks to the agent as tool
+output, each with a citation back to its source document.
+
+`pgvector` rather than a dedicated vector database, when it is built: one
+datastore, one backup, one transaction boundary, and tenant filtering identical
+to every other query. The Compose stacks already use the `pgvector` image and
+create the extension, so the decision is provisioned — but nothing stores or
+queries a vector.
 
 ---
 
@@ -351,8 +384,9 @@ arguments are never re-derived by the model after the fact.
 **Workflows.** A workflow is an ordered set of steps (tool call, agent step,
 approval gate, or condition) stored as a definition and executed as a durable
 state machine. Each step run is persisted, so an execution survives a restart and
-can be retried or resumed from its last completed step. Long-running executions
-are driven by Redis-backed background workers rather than the request thread.
+can be retried or resumed from its last completed step. There is **no background
+worker**: an execution is advanced by the request that asked for it, and one
+whose request died is swept and failed rather than silently resumed.
 
 ---
 
@@ -374,7 +408,13 @@ that?" after the fact.
 **Operational telemetry.** Structured JSON logs carrying request id, tenant id
 and user id on every line; health endpoints (`/health` for liveness,
 `/health/ready` checking Postgres and Redis); counters and histograms for request
-rate, error rate, agent run duration, tool failures, and token spend per tenant.
+rate, error rate, agent run duration and tool failures.
+
+**No tenant identifier and no execution identifier is ever a metric label or a
+span attribute** — a bounded label set with an overflow bucket instead. Per
+organization figures are an authenticated, tenant-scoped *usage query*, not a
+metric; anyone who can scrape metrics is not thereby entitled to know which
+organization is spending the most.
 
 ---
 
@@ -382,12 +422,15 @@ rate, error rate, agent run duration, tool failures, and token spend per tenant.
 
 - **Secrets from the environment only.** No credential is committed; `.env` is
   ignored and `.env.example` documents every variable.
-- **Authentication.** JWT access tokens plus refresh tokens; passwords hashed
-  with a modern KDF.
-- **Authorization.** Role-based within a tenant (owner, admin, operator, viewer),
-  checked in the service layer. Tenant membership is verified on every request,
-  not trusted from the token alone.
-- **Tenant isolation.** Section 4 — scoped repositories with RLS as a backstop.
+- **Authentication.** JWT access tokens, restricted to HMAC algorithms;
+  passwords hashed with Argon2id. **There are no refresh tokens and no token
+  revocation** — expiry is what ends a session.
+- **Authorization.** Role-based within an organization (owner, admin, member),
+  checked in the service layer. Membership is verified against the database on
+  every request, never trusted from the token alone.
+- **Tenant isolation.** Section 4 — scoped repositories, with composite foreign
+  keys as the database-level backstop. **Row-level security is not
+  implemented.**
 - **Input validation.** Pydantic v2 at the boundary; SQLAlchemy parameter binding
   throughout — no string-built SQL.
 - **Agent containment.** Tools are an allowlist. The model cannot reach the
@@ -396,15 +439,17 @@ rate, error rate, agent run duration, tool failures, and token spend per tenant.
 - **Prompt injection.** Retrieved document content and tool output are treated as
   untrusted data. Permission to act comes from the registry and the policy layer,
   never from instructions found inside content.
-- **Transport and limits.** TLS at the edge, CORS restricted to configured
-  origins, per-tenant rate limiting in Redis.
+- **Transport and limits.** TLS at the edge and CORS restricted to configured
+  origins. **There is no rate limiting and there are no quotas** — per-tenant
+  limiting in Redis is intended, and nothing bounds what one organization may
+  spend today.
 
 ---
 
 ## 12. Testing
 
 `pytest` throughout, against a real PostgreSQL instance (not SQLite) so that
-migrations, constraints, and RLS behave as they will in production.
+migrations and constraints behave as they will in production.
 
 - **Unit** — services and pure logic, with repositories faked.
 - **Integration** — routers through to the database, per-test transaction
@@ -438,8 +483,9 @@ forward-only and reviewed like code.
 Production keeps the same shape — the container runs behind a reverse proxy with
 TLS, backed by managed Postgres and Redis. Horizontal scaling is more instances
 of the same image, which works because the application holds no in-process state:
-sessions live in the JWT, cache and queue live in Redis, everything else is in
-Postgres.
+sessions are stateless JWTs and everything else is in Postgres. Redis holds
+nothing today — it answers the readiness probe — so a cache and a queue would be
+what it carries once either is built.
 
 ---
 
@@ -448,10 +494,10 @@ Postgres.
 | Decision | Choice | Rationale |
 | --- | --- | --- |
 | Overall style | Modular monolith | One deployable, one transaction boundary; module seams preserved for later extraction |
-| Tenant isolation | Shared schema, `tenant_id`, RLS backstop | Simplest to operate; isolation enforced centrally and testable |
-| Vector storage | `pgvector` in Postgres | One datastore; tenant filtering identical to every other query |
-| Concurrency | Async SQLAlchemy and async FastAPI | The workload is I/O-bound: database, Claude API, external tools |
-| Background work | Redis-backed queue | Redis is already required for cache and rate limiting |
+| Tenant isolation | Shared schema, `organization_id`, composite foreign keys | Simplest to operate; isolation enforced centrally and testable. RLS was intended as a further backstop and is **not implemented** |
+| Vector storage *(planned)* | `pgvector` in Postgres | One datastore; tenant filtering identical to every other query. Image and extension are provisioned; **nothing stores or queries a vector** |
+| Concurrency | Async SQLAlchemy and async FastAPI | The workload is I/O-bound: database, model provider, external tools |
+| Background work *(planned)* | Redis-backed queue | **Not implemented.** There is no worker and no queue; a run is advanced by the request that asked for it |
 | API versioning | `/api/v1` from the start | Cheap now, expensive to retrofit |
 | Agent safety | Tool registry, policy layer, approvals | Model output is a request to act, never authority to act |
 | Audit | Append-only table, no mutation | An audit log that can be edited is not an audit log |
