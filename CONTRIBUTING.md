@@ -3,6 +3,15 @@
 Thanks for looking. This is a solo project developed in public; issues,
 questions and pull requests are all welcome, and none of them need to be large.
 
+**Where to put what.** Issues are for bugs, concrete proposals and questions
+that have a specific answer — the templates in `.github/ISSUE_TEMPLATE/` cover
+all three. Conversations that are not really tickets — how the architecture
+holds up against a particular problem, integrating it with a particular system,
+an idea that is not yet a feature request, or something you built on it — belong
+in GitHub Discussions, which is
+[not enabled yet](docs/owner-actions.md#discussions). Until it is, an issue is
+the only route and that is fine.
+
 If you are unsure whether something is wanted, open an issue first. A short
 description of the problem is more useful than a finished patch that solves a
 different one.

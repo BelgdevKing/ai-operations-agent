@@ -58,18 +58,60 @@ whether help could ever be available.
 
 If any becomes a real offering, it will be stated here as one.
 
-| Potentially | What it would involve |
-| --- | --- |
-| **Deployment assistance** | Standing the platform up in an environment, working through `docs/deployment.md` against real infrastructure |
-| **Cloud integration** | Adapting the Compose deployment to a managed platform — container service, managed PostgreSQL, secret manager |
-| **Internal-system integration** | Connecting it to the systems it needs to read and act on |
-| **Custom tools** | Tools against those systems, with the safety classes and approval policy that match the risk |
-| **Workflow development** | Operational procedures built on the existing execution and approval architecture |
-| **Model and provider integration** | A different provider, or a self-hosted model, behind the existing gateway |
-| **Architecture review** | Tenant isolation, approval semantics, agent safety, observability and reliability — for a team building something comparable |
-| **Security and tenant-boundary review** | Specifically the isolation and approval boundaries, and what a deployment adds around them |
-| **Console work** | Screens for a specific operational context |
-| **Ongoing engineering support** | Continued development against a particular deployment |
+Five categories rather than a longer list, because these are the shapes the work
+actually takes. Each names where in the repository it would begin, so the scope
+is judged against real code rather than a description.
+
+### Architecture review
+
+The proposal/execution split, the tenant boundary, approval semantics, agent
+safety, observability and reliability — for a team building something
+comparable, or evaluating what they have already built.
+
+Begins at [`backend/app/tools/executor.py`](../backend/app/tools/executor.py)
+and [`backend/app/repositories/tenant.py`](../backend/app/repositories/tenant.py).
+Its legitimate output includes *"this architecture does not fit"*.
+
+### Proof of concept
+
+One real read-only tool and one real destructive tool against a real system,
+with the approval gate working end to end — the demonstration in
+[demo.md](demo.md) with a client's data in place of the freight dataset.
+
+Deliberately narrow, because it is enough to tell whether the approach survives
+contact with an actual environment. Extension points 1 and 2 in
+[extensions.md](extensions.md#1-a-read-only-tool).
+
+### Custom integration
+
+Connecting the platform to the systems it must read and act on: repository
+access behind the tenant-scoped pattern, typed tools with the safety classes and
+approval policy that match the risk, operational procedures as workflows, and a
+different model provider or a self-hosted model behind the existing gateway.
+
+Extension points 1, 2, 4, 5 and 7 in [extensions.md](extensions.md).
+
+### Production hardening
+
+What a deployment owes that the platform does not provide: the identity
+environment, cloud infrastructure and secret management, wiring metrics and
+tracing to a collector, and the operational requirements in
+[adoption.md](adoption.md).
+
+Note that rate limiting, quotas, abuse controls and account lifecycle are **not
+implemented** — for anything beyond an internal perimeter they are built, not
+configured.
+
+### Ongoing engineering
+
+Continued development against a running deployment, including console screens
+for a specific operational context (extension point 6).
+
+---
+
+These map onto the engagement progression in
+[revenue-path.md](revenue-path.md#a-possible-engagement-progression), which is
+equally clear that it has never been run.
 
 **No prices appear anywhere in this repository, and none should be inferred.**
 
@@ -108,16 +150,29 @@ roadmap.
 
 ## Contact
 
-> **Commercial contact route: not configured yet.**
->
-> No email address, contact form or scheduling link is published in this
-> repository, and none has been invented for one. GitHub Issues is the only
-> route that exists today.
+**The intended route for commercial and architecture enquiries is GitHub
+Discussions** on this repository — the same place as questions about the
+architecture, integrations and ideas.
 
-Establishing a contact route is an open owner decision — see
-[owner-actions.md](owner-actions.md#commercial-contact-route). Until then,
-nothing on this page can be acted on beyond using the software, which the
-licence already permits.
+> **Status: Discussions is not enabled yet.** It is a repository setting rather
+> than a file, so it cannot be turned on by a commit — see
+> [owner-actions.md](owner-actions.md#discussions). Until it is on,
+> [GitHub Issues](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md)
+> is the only route that exists.
+
+No email address, contact form or scheduling link is published in this
+repository, and none has been invented for one. That is deliberate: an invented
+address would be the one fabricated detail in a repository that otherwise states
+plainly what does and does not exist.
+
+Two things follow from routing enquiries through Discussions rather than a
+private address:
+
+- **The conversation starts in public.** For an architecture question that is an
+  advantage — the answer is useful to the next reader. For anything involving a
+  client's systems, data or security posture, move it out of public view early.
+- **There is no response-time commitment.** This is a solo project developed in
+  public and unfunded; see [Getting help](../README.md#getting-help).
 
 ## Attribution
 

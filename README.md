@@ -466,7 +466,7 @@ Not started:
 | **A question** about deploying it, integrating it, or why a boundary works the way it does | [Open a question issue](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md). [demo.md](docs/demo.md), [deployment.md](docs/deployment.md) and [evaluation.md](docs/evaluation.md) answer most of them first |
 | **A proposal** for something the platform should do differently | [Open a proposal](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=feature_request.md) |
 | **A security vulnerability** | **Not a public issue.** Use GitHub's private reporting — see [SECURITY.md](SECURITY.md) |
-| **A commercial enquiry** | No contact route is configured yet — see below |
+| **A commercial enquiry** — adapting this to your systems | [GitHub Discussions](#if-this-is-useful-to-your-team), once enabled. Not on yet — see below |
 
 This is a solo project developed in public and unfunded. Issues are read and
 questions are welcome; there is no guaranteed response time, and nothing here
@@ -475,49 +475,83 @@ is a support commitment.
 ## If this is useful to your team
 
 The platform is MIT licensed and self-hostable in full — no key, no account, no
-hosted dependency. Everything described above works without paying anyone.
+hosted dependency. Everything described above works without paying anyone, for
+yourself or for a client, and nothing below is a condition of using it.
+
+### It is also a reference implementation
+
+The parts of an operational AI system that are hard to get right — the boundary
+between what a model proposes and what actually runs, the approval gate, tenant
+isolation, durable execution records — are general. The parts that make it
+*yours* are not, and cannot be: they are your systems, your data and your
+environment.
+
+So the repository is deliberately shaped to be adapted rather than merely run.
+[extensions.md](docs/extensions.md) names eight extension points and the source
+file each one starts from:
+
+| What differs for every organization | Where it plugs in |
+| --- | --- |
+| **Internal APIs and systems of record** | Repository access behind the tenant-scoped pattern, then typed tools against it |
+| **Your data model** | Which entities exist, what a tenant owns, and — the question that shapes everything — which actions are destructive |
+| **Authentication** | The platform has its own accounts and JWTs; an existing identity provider, SSO or directory is an integration |
+| **Workflows and approval policy** | Multi-step definitions are JSON documents, not code; who may approve what is policy |
+| **Deployment** | Compose on one host today; a managed platform, managed PostgreSQL and a secret manager are an adaptation |
+| **Security and compliance requirements** | The repository documents its own boundaries in [evaluation.md](docs/evaluation.md) — it cannot assume yours |
+
+Adopting the shape means moving your functions behind the tool interface, which
+is a real port rather than a drop-in. [extensions.md](docs/extensions.md#1-a-read-only-tool)
+shows the size of it honestly.
+
+### If you would rather not do that alone
 
 There is **no paid tier, no hosted service and no support contract today.** The
-list below is what commercial work around a project like this could look like,
-not a set of products being sold. If any of it ever becomes real, it will be
+five categories below are what commercial work around a project like this could
+look like — not products being sold. If any of it ever becomes real, it will be
 stated here plainly.
 
 | Potential service | What it would involve |
 | --- | --- |
-| **Deployment and integration** | Standing the platform up in your environment and connecting it to the systems it needs to read and act on. |
-| **Custom tools** | Tools against your systems, with the safety classes and approval policy that match your risk. |
-| **Workflow implementation** | Operational procedures built on the existing execution and approval architecture. |
-| **Architecture review** | Tenant isolation, approval semantics, agent safety, observability and reliability — for teams building something comparable. |
-| **Custom development** | Extending the platform for a specific operational environment. |
+| **Architecture review** | Tenant isolation, approval semantics, agent safety, observability and reliability — for teams building something comparable |
+| **Proof of concept** | One real read-only tool and one real destructive tool against your systems, with the approval gate working end to end |
+| **Custom integration** | The systems the platform must read and act on; tools with the safety classes and approval policy that match your risk |
+| **Production hardening** | Your identity environment, cloud infrastructure and observability — plus the rate limiting and account lifecycle that are *not* implemented here |
+| **Ongoing engineering** | Continued development against a running deployment, including console work |
 
-> **Commercial contact route: not configured yet.**
+> **Commercial and architecture enquiries: GitHub Discussions.**
 >
+> **Not enabled yet** — it is a repository setting, so no commit can turn it on;
+> see [owner-actions.md](docs/owner-actions.md#discussions). Until then,
+> [open a question issue](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md).
 > No email address, contact form or scheduling link is published in this
-> repository, and none has been invented for it. GitHub Issues is the only
-> route that exists today. Establishing one is an
-> [open decision](#decisions-not-yet-made) for the project owner.
+> repository, and none has been invented for it.
 
 No customers, revenue, partnerships, production deployments or prior engagements
 exist. Nothing here should be read as implying otherwise.
 
 [commercial.md](docs/commercial.md) has the full position: what the licence
-permits, what self-hosting involves, and why a hosted offering does not exist.
-[service-brief.md](docs/service-brief.md) is the scope-level view of what such
-work would involve, and [revenue-path.md](docs/revenue-path.md) is the honest
-account of how far along that path the project is — which is step zero.
+permits, what self-hosting involves, the five categories in detail, and why a
+hosted offering does not exist. [service-brief.md](docs/service-brief.md) is the
+scope-level view of what such work would involve, including what is *not*
+included automatically. [revenue-path.md](docs/revenue-path.md) is the honest
+account of how far along that path the project is — public, with no users and no
+enquiries — and traces the whole path from finding the repository to a
+conversation.
 
 ## Decisions not yet made
 
 Recorded openly rather than answered with a placeholder:
 
-- A contact address or form for commercial enquiries and security reports.
+- ~~A contact route for commercial enquiries.~~ **Decided: GitHub Discussions**
+  — still to be enabled, which is a setting rather than a commit.
 - Whether to offer paid deployment, integration or development work at all.
 - Whether to publish a hosted version, and on what terms.
 - Whether the project moves to a GitHub organization, and keeps this name.
 - The repository description, topics and social preview image — all GitHub
   settings, none of which this repository can configure for itself.
-- Whether to enable Discussions, private vulnerability reporting, and GitHub
-  Sponsors or another funding route.
+- Whether to enable private vulnerability reporting, and GitHub Sponsors or
+  another funding route. No sponsorship destination exists, so
+  `.github/FUNDING.yml` has deliberately not been created.
 - Whether to adopt a code of conduct — deferred until there are contributors
   for one to govern.
 

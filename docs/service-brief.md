@@ -4,9 +4,9 @@ The technical basis for a conversation about building something on this
 architecture.
 
 > **Status: nothing here is currently offered or sold.** There are no clients,
-> no engagements, no published rates, no hosted service and no contact route. A
-> route has to be configured by the repository owner before any of this can be
-> acted on — see [Current status](#current-status).
+> no engagements, no published rates and no hosted service. The contact route —
+> GitHub Discussions — is chosen but not yet enabled, so none of this can be
+> acted on today. See [Current status](#current-status).
 
 This exists so that a technically serious reader can judge *what such work would
 involve* rather than guess. It is a scope document, not an advertisement.
@@ -57,6 +57,11 @@ approach survives contact with their environment.
 Neither step commits anyone to what follows.
 [revenue-path.md](revenue-path.md#a-possible-engagement-progression) sketches
 the full progression — proposed, never run.
+
+Discovery and a proof of concept are the first two of the five categories in
+[commercial.md](commercial.md#potential-professional-services); the other three
+— custom integration, production hardening and ongoing engineering — only become
+relevant once those two have said something useful.
 
 ## Example technical scope
 
@@ -131,13 +136,15 @@ Stated plainly, because a brief that implies more than exists is worse than none
 | Published rates or pricing | **None**, anywhere in this repository |
 | Hosted service | **None**, and none planned — [commercial.md](commercial.md#a-hosted-offering) |
 | Support contract, SLA, warranty | **None.** The MIT licence's "as is" is the whole of it |
-| Contact route | **Not configured yet** |
+| Contact route | **Chosen, not yet enabled** — GitHub Discussions |
 | Production deployments of this software | **None known.** It has never run under real traffic |
 
-> **A contact route still needs to be configured by the repository owner.** No
-> email address, contact form or scheduling link is published here, and none has
-> been invented. GitHub Issues is the only route that exists today. See
-> [owner-actions.md](owner-actions.md#revenue-activation).
+> **The contact route is GitHub Discussions, and it is not enabled yet.** It is
+> a repository setting rather than a file, so no commit can turn it on. No email
+> address, contact form or scheduling link is published here, and none has been
+> invented. Until Discussions is on,
+> [GitHub Issues](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md)
+> is the only route. See [owner-actions.md](owner-actions.md#discussions).
 
 The software itself is MIT licensed and free to use, modify and deploy
 commercially, with or without any of the above. Nothing on this page is a

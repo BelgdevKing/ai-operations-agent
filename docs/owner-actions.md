@@ -3,15 +3,24 @@
 Things that live in GitHub's settings rather than in this repository, and
 therefore cannot be configured by a commit.
 
-**Nothing on this page has been done.** It is a checklist with suggested values,
-not a record of configuration. Each item is the project owner's decision; the
-suggestions are starting points, not recommendations to follow blindly.
+Each item is the project owner's decision; the suggestions are starting points,
+not recommendations to follow blindly. Anything marked **Done** was verified
+against GitHub's public API rather than assumed — everything else is still
+open, and nothing here claims a setting was changed by a commit.
+
+**Two are done: the repository is public and pushed.** The single item that now
+gates everything commercial is [Discussions](#discussions), which is off.
 
 ---
 
 ## Repository settings
 
 ### Description
+
+**Currently unset — verified.** This is the first thing a stranger reads, and on
+a public repository with no description GitHub shows nothing at all where the
+one-line pitch should be. Of everything on this page it is the cheapest with the
+most direct effect on being found.
 
 The one line that appears under the repository name in search results and on the
 profile. GitHub allows 350 characters; short is better.
@@ -24,9 +33,10 @@ If that is too long for the space, the first clause alone carries the idea.
 
 ### Topics
 
-Topics are how the repository is found by someone browsing rather than
-searching. GitHub allows up to 20; fewer and more accurate is better than
-twenty vague ones. Candidates, all accurate to what is implemented:
+**Currently none — verified.** Topics are how the repository is found by someone
+browsing rather than searching, and with none set it appears in no topic
+listing. GitHub allows up to 20; fewer and more accurate is better than twenty
+vague ones. Candidates, all accurate to what is implemented:
 
 ```
 ai-agents  llm  tool-use  human-in-the-loop  approval-workflow
@@ -49,35 +59,67 @@ exists yet.
 
 ### Visibility
 
-The repository is private. **Only the owner should make it public, and only
-after reading through the repository themselves.** An automated scan is not a
-substitute for that: it finds credential-shaped strings, not a comment that
-names an internal system or an example that happens to be a real customer.
+**Done — the repository is public.** Verified against GitHub's public API
+rather than assumed.
 
-What has been checked — a point-in-time audit, worth repeating immediately
-before you publish rather than trusted as a standing guarantee:
+What was checked before publication, recorded as a point-in-time audit rather
+than a standing guarantee:
 
-- **All 357 tracked files** scanned for provider and cloud credential prefixes,
+- **All 361 tracked files** scanned for provider and cloud credential prefixes,
   PEM private-key markers, JWT-shaped tokens, credentialed database URLs and
   literal secret assignments. Every match was inspected. All are either the
   development defaults this repository publishes on purpose — and which a
   deployed environment refuses to start on — or test fixtures whose whole
   purpose is to assert that a value never escapes.
-- **All 578 blobs across the 20 commits of history**, for the same credential
+- **All 592 blobs across the 23 commits of history**, for the same credential
   patterns. Nothing found.
 - **No `.env`, key, log, dump, build output or cache has ever been committed**,
   on any branch, at any point in the history.
 
-Also worth doing before flipping it: read [SECURITY.md](../SECURITY.md) and
-confirm the scope section says what you want it to say, since it becomes a
-public commitment about how reports are handled.
+An automated scan finds credential-shaped strings, not a comment that names an
+internal system or an example that happens to be a real customer. The repository
+was also read through for those, and nothing of the kind was found. No email
+address in it is a contact address: they are demo-dataset and test-fixture
+values on reserved domains — `example.com`, `.example`, `.test`, `.internal` —
+apart from one deliberately malformed string in an input-validation test.
+
+One consequence of publication worth knowing: **every commit carries the
+committer's email address**, which is now public along with the code. GitHub
+offers a `noreply` address for anyone who would rather it were not — changing it
+affects future commits, not the 23 already pushed.
 
 ### Discussions
 
-Off by default. Worth enabling only if you intend to answer; an empty
-Discussions tab reads worse than an absent one. Issues plus the templates in
-`.github/ISSUE_TEMPLATE/` already cover bugs, proposals and
-deployment/integration/architecture questions.
+**Off. Verified against GitHub's API, not assumed — and this is now the item
+that gates the contact route.**
+
+[commercial.md](commercial.md#contact) names Discussions as the intended route
+for commercial and architecture enquiries, and says plainly that it is not
+enabled yet. Turning it on is **Settings → General → Features → Discussions**.
+
+The earlier reasoning here — that an empty Discussions tab reads worse than an
+absent one — still applies to a repository with contributors and no answers. It
+applies less to this one, where Discussions would be the only enquiry route that
+is not a bug tracker, and where an empty tab is the normal state of a project
+with no users yet.
+
+Suggested categories, matching what the documentation already routes there:
+
+| Category | For |
+| --- | --- |
+| **Q&A** | Deploying it, integrating it, why a boundary works the way it does |
+| **Architecture** | The proposal/execution split, tenant isolation, approval semantics |
+| **Integrations** | Connecting it to real systems; tools against a specific domain |
+| **Ideas** | Proposals that are not yet a concrete feature request |
+| **Show and tell** | What someone built on it |
+
+Issues and the templates in `.github/ISSUE_TEMPLATE/` already cover bugs,
+proposals and questions, and should stay as they are — Discussions is for the
+conversations that do not belong in a tracker.
+
+**After enabling, one small follow-up:** add a Discussions link to
+`.github/ISSUE_TEMPLATE/config.yml`, which deliberately does not contain one
+today because the link would 404 while the feature is off.
 
 ### Private vulnerability reporting
 
@@ -101,22 +143,32 @@ of the repository avoids. Create the file if and when a destination exists.
 
 ### Commercial contact route
 
-There is none. No email address, contact form or scheduling link appears
-anywhere in the repository, and none has been invented. The README and
-[commercial.md](commercial.md) both say so plainly rather than leaving a
-placeholder.
+**Decided: GitHub Discussions. Not yet active, because Discussions is off.**
 
-Until one exists, GitHub Issues is the only route. If you want commercial
-enquiries, a route has to be created and then referenced from
-[the README](../README.md#if-this-is-useful-to-your-team),
+No email address, contact form or scheduling link appears anywhere in the
+repository, and none has been invented. That was a deliberate choice rather than
+an oversight — see [Discussions](#discussions) for the one action that makes the
+chosen route real.
+
+Discussions was preferred over publishing an address for three reasons worth
+recording: it exposes no personal data on a public repository, it costs nothing
+and is reversible, and an architecture answer given in public is useful to the
+next reader. Its limitation is equally real — a conversation about a client's
+systems, data or security posture should move out of public view early, and
+[commercial.md](commercial.md#contact) says so.
+
+If an address or scheduling link is ever added instead, it belongs in exactly
+three places: [the README](../README.md#if-this-is-useful-to-your-team),
 [commercial.md](commercial.md#contact) and [SECURITY.md](../SECURITY.md).
 
 ### Whether to offer paid work at all
 
-[commercial.md](commercial.md#potential-professional-services) lists ten kinds
-of work the codebase could be a foundation for and states plainly that none is
-offered, none has been performed and no rate has been set. Whether any becomes
-real — and whether the project wants that — is unanswered.
+[commercial.md](commercial.md#potential-professional-services) lists five
+categories of work the codebase could be a foundation for — architecture review,
+proof of concept, custom integration, production hardening, ongoing engineering
+— and states plainly that none is offered, none has been performed and no rate
+has been set. Whether any becomes real, and whether the project wants that, is
+unanswered.
 
 A hosted offering is documented as a *possible future direction only*, with the
 missing pieces named: billing, quotas, rate limiting, sign-up, account lifecycle
@@ -132,30 +184,34 @@ need updating.
 
 ### Revenue activation
 
-None of these has been decided, and none can be done from the repository.
-[revenue-path.md](revenue-path.md) sets out why the first two gate everything
-else.
+[revenue-path.md](revenue-path.md#what-would-have-to-be-true-first) sets out why
+the first two gate everything else.
 
-1. **Configure a professional contact route.** There is none. Without it,
-   nothing in [service-brief.md](service-brief.md) can be acted on.
-2. **Decide whether to offer paid implementation work at all.** Unanswered, and
+1. ~~**Publish the repository.**~~ **Done.** It is public; see
+   [Visibility](#visibility).
+2. **Enable Discussions.** The chosen contact route, and the only item here that
+   costs nothing, takes one click and is reversible. Until it is on, nothing in
+   [service-brief.md](service-brief.md) can be acted on — see
+   [Discussions](#discussions).
+3. **Set the description and topics.** Publication makes the repository
+   reachable; these make it findable. Both are still unset.
+4. **Decide whether to offer paid implementation work at all.** Unanswered, and
    a legitimate answer is no.
-3. **Decide whether to publish a service profile** — on GitHub, a personal site,
+5. **Decide whether to publish a service profile** — on GitHub, a personal site,
    or not at all.
-4. **Decide whether to create a GitHub Sponsors destination.** Required before
+6. **Decide whether to create a GitHub Sponsors destination.** Required before
    `.github/FUNDING.yml` can exist; see [Funding](#funding).
-5. **Decide whether to publish the repository.** Nothing can be found while it
-   is private; see [Visibility](#visibility).
-6. **Decide whether to create a portfolio or case-study page.** Note that there
+7. **Decide whether to create a portfolio or case-study page.** Note that there
    are no cases to study — no engagement has been performed.
-7. **Decide whether to record a public demo video.** See
+8. **Decide whether to record a public demo video.** See
    [Screenshots](#screenshots) for why none exists yet.
-8. **Decide whether to add a scheduling mechanism.** Only meaningful after 1
-   and 2.
+9. **Decide whether to add a scheduling mechanism.** Only meaningful after 2
+   and 4.
 
-Items 1, 3, 4, 6, 7 and 8 all involve publishing a destination or an identity.
-**None has been created or invented here**, and each would need the owner to
-supply the real value.
+Items 5 to 9 all involve publishing a destination or an identity. **None has
+been created or invented here**, and each would need the owner to supply the
+real value. Items 2 and 3 need no new identity at all — they are settings on a
+repository that already exists.
 
 ### Code of conduct
 
@@ -165,14 +221,13 @@ adding when the first outside contributor arrives.
 
 ### Whether to push
 
-`main` is many commits ahead of `origin/main`, which still sits at an early
-commit — check with `git status -sb`. Publishing is a decision rather than a
-chore: everything here has been written on the assumption a stranger will read
-it, so pushing is the moment the project effectively becomes public, whatever
-the visibility setting says.
+**Done.** `main` and `origin/main` are in step, and CI runs on each push.
 
-Worth doing first: read [SECURITY.md](../SECURITY.md) and confirm its scope
-section says what you are willing to commit to publicly.
+Kept as a note rather than deleted, because the reasoning still applies to every
+future push: everything here is written on the assumption a stranger will read
+it, and pushing is the moment that becomes true. [SECURITY.md](../SECURITY.md)
+is a public commitment about how reports are handled — worth re-reading whenever
+its scope section would change.
 
 ---
 
