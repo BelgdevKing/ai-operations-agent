@@ -156,11 +156,7 @@ roadmap.
 Discussions** on this repository — the same place as questions about the
 architecture, integrations and ideas.
 
-> **Status: Discussions is not enabled yet.** It is a repository setting rather
-> than a file, so it cannot be turned on by a commit — see
-> [owner-actions.md](owner-actions.md#discussions). Until it is on,
-> [GitHub Issues](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md)
-> is the only route that exists.
+[Open a discussion](https://github.com/BelgdevKing/ai-operations-agent/discussions) — that is the whole of it.
 
 No email address, contact form or scheduling link is published in this
 repository, and none has been invented for one. That is deliberate: an invented

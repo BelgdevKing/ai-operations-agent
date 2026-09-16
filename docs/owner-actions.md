@@ -8,8 +8,10 @@ not recommendations to follow blindly. Anything marked **Done** was verified
 against GitHub's public API rather than assumed — everything else is still
 open, and nothing here claims a setting was changed by a commit.
 
-**Two are done: the repository is public and pushed.** The single item that now
-gates everything commercial is [Discussions](#discussions), which is off.
+**The repository-settings items are done:** it is public and pushed, the
+description and topics are set, Discussions is open and private vulnerability
+reporting is on. What remains here is the decisions, plus two Discussion
+categories GitHub's API cannot create.
 
 ---
 
@@ -17,10 +19,8 @@ gates everything commercial is [Discussions](#discussions), which is off.
 
 ### Description
 
-**Currently unset — verified.** This is the first thing a stranger reads, and on
-a public repository with no description GitHub shows nothing at all where the
-one-line pitch should be. Of everything on this page it is the cheapest with the
-most direct effect on being found.
+**Done — set, and verified against both the authenticated and the public API.**
+The value below is the one in use.
 
 The one line that appears under the repository name in search results and on the
 profile. GitHub allows 350 characters; short is better.
@@ -42,10 +42,10 @@ than the feature list:
 
 ### Topics
 
-**Currently none — verified.** Topics are how the repository is found by someone
-browsing rather than searching, and with none set it appears in no topic
-listing. GitHub allows up to 20; fewer and more accurate is better than twenty
-vague ones. Candidates, all accurate to what is implemented:
+**Done — all sixteen below are set, and verified against the public API.**
+Topics are how the repository is found by someone browsing rather than
+searching. GitHub allows up to 20; fewer and more accurate is better than twenty
+vague ones.
 
 ```
 ai  ai-agents  agentic-ai  llm  generative-ai
@@ -111,45 +111,37 @@ affects future commits, not the 23 already pushed.
 
 ### Discussions
 
-**Off. Verified against GitHub's API, not assumed — and this is now the item
-that gates the contact route.**
+**Enabled — verified against GitHub's API.** It is the contact route named in
+[commercial.md](commercial.md#contact), and the issue-template chooser now links
+to it.
 
-[commercial.md](commercial.md#contact) names Discussions as the intended route
-for commercial and architecture enquiries, and says plainly that it is not
-enabled yet. Turning it on is **Settings → General → Features → Discussions**.
+Enabling it created GitHub's six default categories: Announcements, General,
+Ideas, Polls, Q&A and Show and tell. Three of the five this documentation routes
+people to therefore exist already.
 
-The earlier reasoning here — that an empty Discussions tab reads worse than an
-absent one — still applies to a repository with contributors and no answers. It
-applies less to this one, where Discussions would be the only enquiry route that
-is not a bug tracker, and where an empty tab is the normal state of a project
-with no users yet.
+| Category | For | State |
+| --- | --- | --- |
+| **Q&A** | Deploying it, integrating it, why a boundary works the way it does | Exists |
+| **Ideas** | Proposals that are not yet a concrete feature request | Exists |
+| **Show and tell** | What someone built on it | Exists |
+| **Architecture** | The proposal/execution split, tenant isolation, approval semantics | **Missing** |
+| **Integrations** | Connecting it to real systems; tools against a specific domain | **Missing** |
 
-Suggested categories, matching what the documentation already routes there:
+**The two missing ones have to be created by hand, and that is not a
+preference.** GitHub exposes no way to create a discussion category
+programmatically: none of the 259 mutations in its GraphQL schema mentions
+`DiscussionCategory`, and the REST path returns 404. Checked, not assumed.
+**Discussions → Categories → New category**, twice.
 
-| Category | For |
-| --- | --- |
-| **Q&A** | Deploying it, integrating it, why a boundary works the way it does |
-| **Architecture** | The proposal/execution split, tenant isolation, approval semantics |
-| **Integrations** | Connecting it to real systems; tools against a specific domain |
-| **Ideas** | Proposals that are not yet a concrete feature request |
-| **Show and tell** | What someone built on it |
-
-Issues and the templates in `.github/ISSUE_TEMPLATE/` already cover bugs,
-proposals and questions, and should stay as they are — Discussions is for the
-conversations that do not belong in a tracker.
-
-**After enabling, one small follow-up:** add a Discussions link to
-`.github/ISSUE_TEMPLATE/config.yml`, which deliberately does not contain one
-today because the link would 404 while the feature is off.
+Issues and the templates in `.github/ISSUE_TEMPLATE/` cover bugs, proposals and
+questions, and should stay as they are — Discussions is for the conversations
+that do not belong in a tracker.
 
 ### Private vulnerability reporting
 
-**Settings → Security → Private vulnerability reporting.**
-
-[SECURITY.md](../SECURITY.md) routes reports here and documents a fallback for
-the case where it is not enabled — but the fallback is worse for everyone, since
-it asks a reporter to open a public issue saying they have something private.
-This is the cheapest item on the page and the one with the clearest benefit.
+**Enabled — verified.** [SECURITY.md](../SECURITY.md) routes reports to it, so
+the fallback it documents (asking a reporter to open a public issue saying they
+have something private) should now never be needed.
 
 ### Funding
 
@@ -164,12 +156,11 @@ of the repository avoids. Create the file if and when a destination exists.
 
 ### Commercial contact route
 
-**Decided: GitHub Discussions. Not yet active, because Discussions is off.**
+**Done: GitHub Discussions, and it is open.**
 
 No email address, contact form or scheduling link appears anywhere in the
 repository, and none has been invented. That was a deliberate choice rather than
-an oversight — see [Discussions](#discussions) for the one action that makes the
-chosen route real.
+an oversight.
 
 Discussions was preferred over publishing an address for three reasons worth
 recording: it exposes no personal data on a public repository, it costs nothing
@@ -210,12 +201,10 @@ the first two gate everything else.
 
 1. ~~**Publish the repository.**~~ **Done.** It is public; see
    [Visibility](#visibility).
-2. **Enable Discussions.** The chosen contact route, and the only item here that
-   costs nothing, takes one click and is reversible. Until it is on, nothing in
-   [service-brief.md](service-brief.md) can be acted on — see
-   [Discussions](#discussions).
-3. **Set the description and topics.** Publication makes the repository
-   reachable; these make it findable. Both are still unset.
+2. ~~**Enable Discussions.**~~ **Done.** Two of its categories still need
+   creating by hand — see [Discussions](#discussions).
+3. ~~**Set the description and topics.**~~ **Done.** Publication made the
+   repository reachable; these make it findable.
 4. **Decide whether to offer paid implementation work at all.** Unanswered, and
    a legitimate answer is no.
 5. **Decide whether to publish a service profile** — on GitHub, a personal site,

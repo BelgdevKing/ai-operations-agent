@@ -467,7 +467,7 @@ Not started:
 | **A question** about deploying it, integrating it, or why a boundary works the way it does | [Open a question issue](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md). [demo.md](docs/demo.md), [deployment.md](docs/deployment.md) and [evaluation.md](docs/evaluation.md) answer most of them first |
 | **A proposal** for something the platform should do differently | [Open a proposal](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=feature_request.md) |
 | **A security vulnerability** | **Not a public issue.** Use GitHub's private reporting — see [SECURITY.md](SECURITY.md) |
-| **A commercial enquiry** — adapting this to your systems | [GitHub Discussions](#if-this-is-useful-to-your-team), once enabled. Not on yet — see below |
+| **A commercial enquiry** — adapting this to your systems | [GitHub Discussions](https://github.com/BelgdevKing/ai-operations-agent/discussions) — the route for anything that is not a bug report |
 
 This is a solo project developed in public and unfunded. Issues are read and
 questions are welcome; there is no guaranteed response time, and nothing here
@@ -519,13 +519,11 @@ stated here plainly.
 | **Production hardening** | Your identity environment, cloud infrastructure and observability — plus the rate limiting and account lifecycle that are *not* implemented here |
 | **Ongoing engineering** | Continued development against a running deployment, including console work |
 
-> **Commercial and architecture enquiries: GitHub Discussions.**
+> **Commercial and architecture enquiries: [GitHub Discussions](https://github.com/BelgdevKing/ai-operations-agent/discussions).**
 >
-> **Not enabled yet** — it is a repository setting, so no commit can turn it on;
-> see [owner-actions.md](docs/owner-actions.md#discussions). Until then,
-> [open a question issue](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md).
 > No email address, contact form or scheduling link is published in this
-> repository, and none has been invented for it.
+> repository, and none has been invented for it. A conversation that touches
+> your systems, data or security posture should move out of public view early.
 
 No customers, revenue, partnerships, production deployments or prior engagements
 exist. Nothing here should be read as implying otherwise.
@@ -546,8 +544,8 @@ conversation.
 
 Recorded openly rather than answered with a placeholder:
 
-- ~~A contact route for commercial enquiries.~~ **Decided: GitHub Discussions**
-  — still to be enabled, which is a setting rather than a commit.
+- ~~A contact route for commercial enquiries.~~ **Done: GitHub Discussions**
+  is open.
 - Whether to offer paid deployment, integration or development work at all.
 - Whether to publish a hosted version, and on what terms.
 - Whether the project moves to a GitHub organization, and keeps this name.

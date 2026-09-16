@@ -8,9 +8,7 @@ that have a specific answer — the templates in `.github/ISSUE_TEMPLATE/` cover
 all three. Conversations that are not really tickets — how the architecture
 holds up against a particular problem, integrating it with a particular system,
 an idea that is not yet a feature request, or something you built on it — belong
-in GitHub Discussions, which is
-[not enabled yet](docs/owner-actions.md#discussions). Until it is, an issue is
-the only route and that is fine.
+in [GitHub Discussions](https://github.com/BelgdevKing/ai-operations-agent/discussions).
 
 If you are unsure whether something is wanted, open an issue first. A short
 description of the problem is more useful than a finished patch that solves a

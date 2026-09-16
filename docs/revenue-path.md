@@ -3,10 +3,10 @@
 How an open-source project like this could lead to paid engineering work, and
 exactly how far along that path it currently is.
 
-> **Current position: step one of four.** The repository is public. It has no
-> users, no enquiries, no engagements and no revenue, and its contact route —
-> GitHub Discussions — is not enabled yet. Everything below "what exists today"
-> is a plan, not a pipeline.
+> **Current position: step two of four.** The repository is public and its
+> contact route — GitHub Discussions — is open. It has no users, no enquiries,
+> no engagements and no revenue. Everything below "what exists today" is a plan,
+> not a pipeline.
 
 This document exists so the question has an honest written answer — for the
 owner, and for anyone evaluating whether help could ever be available. It is not
@@ -68,7 +68,7 @@ being sold to at any point in it.
 ```
 Finds the repository on GitHub
     |  Description, topics and social preview are what make this possible.
-    |  All three are still unset - owner-actions.md.
+    |  The first two are set; the social preview is not.
     v
 Reads the README
     |  First screen: what it is, the one distinction that matters,
@@ -93,8 +93,8 @@ Recognises their own problem in it
     |  client-problems.md - organised by problem, not by feature.
     v
 Starts a conversation
-       GitHub Discussions, once enabled. service-brief.md is what
-       that conversation would be about.
+       GitHub Discussions. service-brief.md is what that
+       conversation would be about.
 ```
 
 Two things worth noticing about this path.
@@ -186,19 +186,18 @@ The gap between this document and any revenue, listed as prerequisites rather
 than as a roadmap. All are owner decisions —
 [owner-actions.md](owner-actions.md#revenue-activation):
 
-1. ~~**The repository is published.**~~ **Done.** It is public, and the
-   description, topics and social preview that make it findable are still unset
-   — see [owner-actions.md](owner-actions.md#repository-settings).
-2. **A contact route exists.** Not yet. The intended route is GitHub
-   Discussions, which is a settings toggle away and costs nothing; until it is
-   on, GitHub Issues is all there is.
+1. ~~**The repository is published.**~~ **Done.** It is public, with a
+   description and sixteen topics set; only the social preview image is still
+   absent — see [owner-actions.md](owner-actions.md#repository-settings).
+2. ~~**A contact route exists.**~~ **Done.** GitHub Discussions is open, and
+   the documentation routes enquiries there.
 3. **A decision to offer paid work at all.** Unanswered, and a legitimate answer
    is no.
 4. **Somebody finds it and has one of the problems.** Not something the
    repository can arrange.
 
-Step 1 is done. Step 2 is one toggle. Step 4 is neither, and no amount of
-documentation makes it certain — publication makes the project findable, not
+Steps 1 and 2 are done. Step 4 is neither, and no amount of documentation makes
+it certain — publication and a contact route make the project reachable, not
 found.
 
 ## What this document is not

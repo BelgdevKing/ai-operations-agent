@@ -231,8 +231,8 @@ Kept distinct on purpose, because conflating them is how expectations drift:
 - **Customization.** Does not exist and would be built: the tools, the data
   access, the approval policy, the console changes.
 - **Professional services.** The work of doing the second thing. Currently
-  **none is offered or sold** — [commercial.md](commercial.md) is explicit, and
-  the contact route is not enabled yet.
+  **none is offered or sold** — [commercial.md](commercial.md) is explicit
+  about that.
 
 ### Explicitly outside a proof of concept
 
@@ -263,11 +263,7 @@ that progression in full and is equally clear that it has never been run.
 
 The intended route is **GitHub Discussions** on this repository.
 
-> **Discussions is not enabled yet.** It is a repository setting, so no commit
-> can turn it on — see [owner-actions.md](owner-actions.md#discussions). Until
-> it is,
-> [a question issue](https://github.com/BelgdevKing/ai-operations-agent/issues/new?template=question.md)
-> is the only route.
+[Open a discussion](https://github.com/BelgdevKing/ai-operations-agent/discussions).
 
 No email address, contact form or scheduling link is published in this
 repository, and none has been invented. A conversation that touches a client's
