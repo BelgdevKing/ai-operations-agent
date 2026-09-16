@@ -47,12 +47,13 @@ key; everything else does not.
 
 | | |
 | --- | --- |
+| **How does it work?** | [technical-overview.md](docs/technical-overview.md) — the whole architecture in one read |
 | **Can I evaluate it?** | [evaluation.md](docs/evaluation.md) — what is implemented, where the trust boundary is, what to test first |
-| **Does it fit my problem?** | [use-cases.md](docs/use-cases.md) — six worked examples, and where it fits badly |
+| **Does it fit my problem?** | [client-problems.md](docs/client-problems.md) — organised by problem · [use-cases.md](docs/use-cases.md) — by application |
 | **Can I run it?** | [Quick start](#quick-start) · [demo.md](docs/demo.md) |
 | **How do I extend it?** | [extensions.md](docs/extensions.md) — the eight extension points and their source files |
 | **What would adopting it cost me?** | [adoption.md](docs/adoption.md) — what the platform does, and what a deployment still owes |
-| **Is there professional help?** | [commercial.md](docs/commercial.md) — MIT, self-hosted, no paid tier or hosted service today |
+| **Is there professional help?** | [commercial.md](docs/commercial.md) · [service-brief.md](docs/service-brief.md) — none offered or sold today |
 
 ---
 
@@ -499,8 +500,11 @@ stated here plainly.
 No customers, revenue, partnerships, production deployments or prior engagements
 exist. Nothing here should be read as implying otherwise.
 
-[docs/commercial.md](docs/commercial.md) has the full position: what the licence
+[commercial.md](docs/commercial.md) has the full position: what the licence
 permits, what self-hosting involves, and why a hosted offering does not exist.
+[service-brief.md](docs/service-brief.md) is the scope-level view of what such
+work would involve, and [revenue-path.md](docs/revenue-path.md) is the honest
+account of how far along that path the project is — which is step zero.
 
 ## Decisions not yet made
 

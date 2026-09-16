@@ -130,6 +130,33 @@ relative where possible, but `README.md`, `SECURITY.md` and
 `.github/ISSUE_TEMPLATE/config.yml` each contain absolute GitHub URLs that would
 need updating.
 
+### Revenue activation
+
+None of these has been decided, and none can be done from the repository.
+[revenue-path.md](revenue-path.md) sets out why the first two gate everything
+else.
+
+1. **Configure a professional contact route.** There is none. Without it,
+   nothing in [service-brief.md](service-brief.md) can be acted on.
+2. **Decide whether to offer paid implementation work at all.** Unanswered, and
+   a legitimate answer is no.
+3. **Decide whether to publish a service profile** — on GitHub, a personal site,
+   or not at all.
+4. **Decide whether to create a GitHub Sponsors destination.** Required before
+   `.github/FUNDING.yml` can exist; see [Funding](#funding).
+5. **Decide whether to publish the repository.** Nothing can be found while it
+   is private; see [Visibility](#visibility).
+6. **Decide whether to create a portfolio or case-study page.** Note that there
+   are no cases to study — no engagement has been performed.
+7. **Decide whether to record a public demo video.** See
+   [Screenshots](#screenshots) for why none exists yet.
+8. **Decide whether to add a scheduling mechanism.** Only meaningful after 1
+   and 2.
+
+Items 1, 3, 4, 6, 7 and 8 all involve publishing a destination or an identity.
+**None has been created or invented here**, and each would need the owner to
+supply the real value.
+
 ### Code of conduct
 
 Deliberately absent. It is boilerplate until there are contributors for it to
