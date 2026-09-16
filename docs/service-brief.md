@@ -48,6 +48,10 @@ which of those are destructive — the last being the question that shapes
 everything else. Its legitimate output includes *"this architecture does not
 fit"*.
 
+[discovery.md](discovery.md) sets out what discovery would establish — fifteen
+areas, none of which assumes an answer — and scopes a proof of concept in
+detail, including what falls outside one.
+
 **A proof of concept** is deliberately narrow: one real read-only tool and one
 real destructive tool against a real system, with the approval gate working
 end to end. That is the demonstration in [demo.md](demo.md) with the client's

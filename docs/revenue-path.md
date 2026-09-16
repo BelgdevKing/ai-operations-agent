@@ -168,6 +168,10 @@ Ongoing engineering
        Continued development against a running deployment.
 ```
 
+[discovery.md](discovery.md) is the first two steps in working detail: the
+profiles this tends to fit, what discovery would establish, and a scoped proof
+of concept with the things it explicitly excludes.
+
 Two honest notes about it:
 
 - **Each step should be able to end the engagement.** Discovery concluding "this

@@ -112,6 +112,8 @@ for a specific operational context (extension point 6).
 These map onto the engagement progression in
 [revenue-path.md](revenue-path.md#a-possible-engagement-progression), which is
 equally clear that it has never been run.
+[discovery.md](discovery.md) is the working version: what a first conversation
+would establish, and what a proof of concept would and would not include.
 
 **No prices appear anywhere in this repository, and none should be inferred.**
 

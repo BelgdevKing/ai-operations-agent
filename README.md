@@ -54,6 +54,7 @@ key; everything else does not.
 | **How do I extend it?** | [extensions.md](docs/extensions.md) — the eight extension points and their source files |
 | **What would adopting it cost me?** | [adoption.md](docs/adoption.md) — what the platform does, and what a deployment still owes |
 | **Is there professional help?** | [commercial.md](docs/commercial.md) · [service-brief.md](docs/service-brief.md) — none offered or sold today |
+| **What would a conversation involve?** | [discovery.md](docs/discovery.md) — what would be asked, and what a first piece of work could be |
 
 ---
 
@@ -533,7 +534,10 @@ exist. Nothing here should be read as implying otherwise.
 permits, what self-hosting involves, the five categories in detail, and why a
 hosted offering does not exist. [service-brief.md](docs/service-brief.md) is the
 scope-level view of what such work would involve, including what is *not*
-included automatically. [revenue-path.md](docs/revenue-path.md) is the honest
+included automatically. [discovery.md](docs/discovery.md) is what a first
+conversation would actually cover — the questions, a plausible proof-of-concept
+scope, and what would deliberately not be promised.
+[revenue-path.md](docs/revenue-path.md) is the honest
 account of how far along that path the project is — public, with no users and no
 enquiries — and traces the whole path from finding the repository to a
 conversation.

@@ -25,11 +25,20 @@ most direct effect on being found.
 The one line that appears under the repository name in search results and on the
 profile. GitHub allows 350 characters; short is better.
 
+> Open-source AI operations agent platform with safety boundaries, approvals,
+> workflows, observability, and extensible business tools.
+
+Every claim in it is implemented: the safety boundary is
+[`backend/app/tools/executor.py`](../backend/app/tools/executor.py), approvals
+and workflows are durable state machines, observability is Prometheus metrics
+and W3C traces, and the five shipped tools are the extensible part.
+
+An earlier alternative, kept because it leads with the differentiator rather
+than the feature list:
+
 > Self-hosted multi-tenant AI agents for operations — the model proposes tool
 > calls, the platform authorizes, executes, and stops for human approval before
 > anything destructive.
-
-If that is too long for the space, the first clause alone carries the idea.
 
 ### Topics
 
@@ -39,13 +48,25 @@ listing. GitHub allows up to 20; fewer and more accurate is better than twenty
 vague ones. Candidates, all accurate to what is implemented:
 
 ```
-ai-agents  llm  tool-use  human-in-the-loop  approval-workflow
-multi-tenant  fastapi  python  nextjs  typescript  postgresql
-self-hosted  anthropic  openai  observability  agent-framework
+ai  ai-agents  agentic-ai  llm  generative-ai
+python  fastapi  react  postgresql
+workflow-automation  human-in-the-loop  approval-workflow
+tool-use  multi-tenant  self-hosted  observability
 ```
 
-Avoid topics that imply something untrue — `production-ready`, `enterprise`,
-`rag` (retrieval is not implemented), `saas` (there is no hosted service).
+Each is accurate to what is implemented. `react` covers the Next.js 15 / React
+19 console; `workflow-automation` covers the durable workflow engine;
+`agentic-ai` and `tool-use` cover the agent loop and the typed tool registry.
+
+**Deliberately excluded: `rag`.** Retrieval is not implemented — there is a
+`documents` table holding metadata and an empty `app/knowledge/` package, and
+nothing else: no upload, extraction, chunking, embedding or vector search. A
+`rag` topic would put the repository in front of people looking for exactly the
+capability it does not have, which wastes their time and costs the project the
+credibility the rest of this documentation is built on. Add it if and when
+retrieval is built.
+
+Also avoid `production-ready`, `enterprise` and `saas` — none is true today.
 
 ### Social preview image
 
